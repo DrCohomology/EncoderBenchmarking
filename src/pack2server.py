@@ -30,7 +30,7 @@ def pack2server():
             os.mkdir(dst)
         except FileExistsError:
             print(f"{dst} already exists!")
-    tocopy = ["main5.py", "encoders.py", "utils.py"]
+    tocopy = ["main6.py", "encoders.py", "utils.py"]
     os.chdir(os.path.join(base_dir, "src"))
     for fname in glob.glob("*.py"):
         if fname in tocopy:

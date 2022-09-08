@@ -25,7 +25,7 @@ from category_encoders import (
     CountEncoder,
     BinaryEncoder,
 )
-from lightgbm import LGBMClassifier
+from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 from numba import njit
 from openml.datasets import edit_dataset, fork_dataset, get_dataset
 from scipy.stats import chi2_contingency
@@ -62,246 +62,232 @@ from sklearn.tree import DecisionTreeClassifier, plot_tree
 import src.encoders as e
 import src.utils as u
 
-# Get the datasets
+# LGBM test
 
-# Pargent
-seca21 = {
-    
-}
-
-pargent22_total = {
-    'midwest_survey': 42805,    
-    'traffic_violations': 42132, 
-    'airlines': 1169, 
-    'ames_housing': 43926, 
-    'avocado_sales': 43927, 
-    'amazon_employee_access': 43900,
-    'road_safety_drivers_sex': 42803, 
-    'churn': 42178,
-    'beer': 0,  
-    'click_prediction_small': 1218,
-    'delays_zurich': 0, 
-    'employees_salaries': 0,
-    'flight_delays': 0,
-    'hpc_job_scheduling': 0, 
-    'kdd98': 0, 
-    'medical_charges': 0, 
-    'nyc_taxi': 0, 
-    'okcupid': 0, 
-    'open_payments': 42738, 
-    'particulate_matter_ukair': 0, 
-    'porto_seguro': 41224, 
-    'seattlecrime6': 0, 
-    'sf_police_incidents': 0, 
-    'upload_dataset': 0, 
-    'video_game_sales': 0, 
-    'wine_reviews': 0
-}
+from sklearn.model_selection import train_test_split
 
 
-other = {
-    'diabetes130us': 4541, 
-    'ca_environmental_conditions': 43606,
-    'amazon_employee_access': 43900, 
-    'kick': 41162,
-    'churn': 42178, 
-    'housing_california': "?" # reg
-}
-    
-    
 
-datasets = {
-    'pargent22': {
-        'midwest_survey': 42805,    
-        'traffic_violations': 42132, 
-        'airlines': 1169, 
-        'ames_housing': 43926, 
-        'avocado_sales': 43927, 
-        'amazon_employee_access': 43900,
-        'road_safety_drivers_sex': 42803, 
-        'churn': 42178,
-        'click_prediction_small': 1218,
-        'open_payments': 42738, 
-        'porto_seguro': 41224, 
-    },
-    'prokhorenkhova18': {
-        'adult': 1590, 
-        'amazon_employee_access': 43900, 
-        'click_prediction_small': 1218, 
-        'epsilon': 'https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary.html', 
-        'kdd_internet_usage': 981,
-        'KDDCup09_appetency': 1111,
-        'KDDCup09_churn': 1112,
-        'KDDCup09_upselling': 1114, 
-        'kick': 41162
-    },
-    'dahouda21': {
-        'bank_marketing': 1461,
-        'adult': 1590, 
-        'vehicle_coupon': 'https://archive.ics.uci.edu/ml/datasets/in-vehicle+coupon+recommendation', 
-    },
-    'zhu20': {
-        'churn': 42178, 
-        'adult': 1590, 
-        'movielens': "https://grouplens.org/datasets/movielens/",
-        'taobao': "https://tianchi.aliyun.com/dataset/dataDetail?dataId=56",
-    },
-    'wright19': {
-        'tictactoe': 50, 
-        'ra snp': '?' 
-    },
-    'cerda22': {
-        'us_crime': 315, 
-        'medical_charges': 42720, # reg
-        'midwest_survey': 42805, 
-        'open_payments': 42738, 
-        'road_safety_drivers_sex': 42803, 
-        'traffic_violations': 42132, 
-        'kickstarter_projects': 42076, 
-        'vancouver_employee': 42090, # broken?
-        'federal_election': 42080, # reg
-        'met_objects': 42161, # broken
-        'drug_directory': 43044, # mc
-        'public_procurement': 42163, # reg
-        'journal_name': 42123, # mc
-        'building_permits': '?',
-        'wine_reviews': 43600, # target? reg or mc
-        'colleges': 42159, # reg
-    },
-    'siebes12': {
-        'iris': 41996, # reg
-        'page_blocks': "https://archive.ics.uci.edu/ml/datasets/Page+Blocks+Classification", 
-        'pima': 43582, 
-        'wine': 43600, # target? reg or mc
-        'led7': 40678, # mc
-        'tictactoe': 50
-    },
-    'johnson21': {
-        "CMS_2012-18_B": "https://data.cms.gov/",    
-    },
-    'lucena20': {
-        "ca_weather": "https://www.ncdc.noaa.gov/cdo-web/datatools", # reg
-    },
-    'lin17': {
-        'car_evaluation': 40664, # mc or reg
-        'mushroom': 43922, 
-        'molecular_biology_promoters': 956, 
-        'spectf': 1600, 
-        'mcfp_ctu': 'https://www.stratosphereips.org/datasets-overview', 
-    },
-    'farkhari22': {
-        # 'nsl-kdd': "http://205.174.165.80/CICDataset/NSL-KDD/"    
-    },
-    'valenzuela21': {
-         "adult": 1590, 
-         "titanic": 42438, 
-         
-    },
-    'hu20': {
-        "adult": 1590, 
-        'covertype': 1596, # mc
-        'online_shopper_intentions': 42993         
-                
-    }, 
-    'mine': {
-        'credit-g': 31,
-        'nursery': 959,     
-        'adult': 1590, 
-        'mv': 881,
-        'kdd_internet_usage': 981,
-        'KDDCup09_appetency': 1111,
-        'KDDCup09_churn': 1112,
-        'KDDCup09_upselling': 1114, 
-        'airlines': 1169, 
-        'Agrawal1': 1235, 
-        'bank_marketing': 1461, 
-        'nomao': 1486, 
-        'pc1': 1068, 
-        'pc2': 1069, 
-        'pc3': 1050, 
-        'pc4': 1049, 
-        'airlines': 1169, 
-        
-    }
-}
+#%% LEV distance
 
-def isint(x):
-    try: 
-        int(x)
-    except:
-        return False
-    else:
-        return True
-
-d = {}
-for dd in datasets.values():
-    dd1 = {k:v for k, v in dd.items() if isint(v)}
-    d.update(dd1)
-
-#%%
-
-failed = {}
-notbc = {}
-for dname, did in tqdm(d.items()):
-    try:
-        dataset = get_dataset(did)
-        X, y, categorical_indicator, attribute_names = dataset.get_data(
-            target=dataset.default_target_attribute, dataset_format="dataframe"
-        )
-        
-        # check if it works and is binary classification
-        if len(X) == 0 or len(y) == 0:
-            failed[dname] = did
-            continue
-        elif len(y) != len(X):
-            failed[dname] = did
-            continue
-        elif len(y.unique()) > 2:
-            notbc[dname] = did
-            continue
-        
-    except:
-        failed[dname] = did
-
-#%%
-good = {
-    k: v for (k, v) in d.items() if k not in set(failed.keys()).union(notbc.keys())        
-}
-
-#%%
-
-import requests, zipfile, io, scipy
-
-path = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00603/in-vehicle-coupon-recommendation.csv'
-path = 'http://archive.ics.uci.edu/ml/machine-learning-databases/covtype/covtype.data.gz'
-
-a = pd.read_csv(path)
-
-# r = requests.get(path)
-# z = zipfile.ZipFile(io.BytesIO(r.content))
-# dat = scipy.io.arff.loadarff(z.read('KDDTrain+.arff'))
-
-
-#%%
-dataset = get_dataset(959)
+dataset = get_dataset(1590)
 X, y, categorical_indicator, attribute_names = dataset.get_data(
     target=dataset.default_target_attribute, dataset_format="dataframe"
 )
 
-X = X.dropna(axis=0, how="any").sample(1000)
-y = pd.Series(e.LabelEncoder().fit_transform(y[X.index]), name="target")
-
-ee = e.Discretized(e.TargetEncoder(), how="bins")
-eee = e.TargetEncoder()
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all")
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
 
 X.reset_index(drop=True, inplace=True)
 y.reset_index(drop=True, inplace=True)
 
-XE = ee.fit_transform(X, y)
-XEE = eee.fit_transform(X, y)
+def lev_dist(a, b):
+    def min_dist(s1, s2):
 
-print(XE.iloc[0,0])
-print(XEE.iloc[0,0])
+        if s1 == len(a) or s2 == len(b):
+            return len(a) - s1 + len(b) - s2
+
+        # no change required
+        if a[s1] == b[s2]:
+            return min_dist(s1 + 1, s2 + 1)
+
+        return 1 + min(
+            min_dist(s1, s2 + 1),      # insert character
+            min_dist(s1 + 1, s2),      # delete character
+            min_dist(s1 + 1, s2 + 1),  # replace character
+        )
+
+    return min_dist(0, 0)
+    
+for s1, s2 in itertools.product(X.education.unique(), repeat=2):
+    print(s1, s2, lev_dist(s1, s2))
+
+    
+
+
+#%%
+
+class RandomModel():
+    
+    def __init__(self):
+        pass
+    
+    def fit(self, X, y):
+        return self
+    
+    def predict(self, X):
+        return pd.Series(np.random.randint(0, 2, len(X)))
+
+np.random.seed(32)
+n = 10000
+l = 20
+
+m = np.random.randint(0, 2, (n, l))
+
+X = pd.DataFrame(m)
+y = (np.average(m, axis=1).round())
+
+
+# model1 = RandomModel()
+model1 = RandomForestClassifier()
+# model2 = DecisionTreeClassifier()
+model2 = RandomForestClassifier()
+scoring = u.roc_auc_score
+
+Xtr, Xte, ytr, yte = train_test_split(X, y, stratify=y, test_size=0.8)
+
+# train model1 on X, predict y1, compute y2
+model1.fit(Xtr, ytr)
+y_ = (ytr != model1.predict(Xtr)).astype(int)
+
+# train model2 to learn the correct predictions of model1
+model2.fit(Xtr, y_)
+
+train_acc = scoring(ytr, model1.predict(Xtr))
+try:
+    pred_train_acc = scoring((ytr != model1.predict(Xtr)).astype(int), model2.predict(Xtr))
+except:
+    pred_train_acc = 1
+
+test_acc = scoring(yte, model1.predict(Xte))
+pred_test_acc = scoring((yte != model1.predict(Xte)).astype(int), model2.predict(Xte))
+
+print(f"train: {train_acc:.04f}, test: {test_acc:.04f}, pred_train: {pred_train_acc:.04f}, pred_test: {pred_test_acc:.04f}")
+
+#%%
+
+odf = openml.datasets.list_datasets(output_format="dataframe")
+cat1 = odf.loc[(odf.NumberOfClasses > 0) & (odf.NumberOfSymbolicFeatures >= 2)].shape[0]
+cat2 = odf.loc[((odf.NumberOfClasses == 0) | (odf.NumberOfClasses.isna())) & (odf.NumberOfSymbolicFeatures >= 1)].shape[0]
+num1 = odf.loc[(odf.NumberOfClasses > 0) & (odf.NumberOfSymbolicFeatures < 2)].shape[0]
+num2 = odf.loc[((odf.NumberOfClasses == 0) | (odf.NumberOfClasses.isna())) & (odf.NumberOfSymbolicFeatures < 1)].shape[0]
+
+bc = odf.loc[odf.NumberOfClasses == 2].shape[0]
+
+print(f'BC: {bc}')
+print(f"total: {odf.shape[0]}, cat: {cat1+cat2}, num: {num1+num2}")
+#%%
+dataset = get_dataset(1169)
+X, y, categorical_indicator, attribute_names = dataset.get_data(
+    target=dataset.default_target_attribute, dataset_format="dataframe"
+)
+
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all")
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
+
+X.reset_index(drop=True, inplace=True)
+y.reset_index(drop=True, inplace=True)
+
+cats = X.select_dtypes(include=("category", "object")).columns
+nums = X.select_dtypes(exclude=("category", "object")).columns
+
+cat_imputer = e.DFImputer(u.SimpleImputer(strategy="most_frequent"))
+num_imputer = e.DFImputer(u.SimpleImputer(strategy="median"))
+encoder = e.TargetEncoder()
+scaler = u.RobustScaler()
+model = u.LGBMClassifier(random_state=3, n_estimators=500, metric="None", verbosity=-1)
+# model = u.DecisionTreeClassifier()
+scoring = u.roc_auc_score
+
+catpipe = Pipeline([
+    ("imputer", cat_imputer), 
+    ("encoder", encoder)
+]) 
+numpipe = Pipeline([
+    # ("imputer", num_imputer), 
+    ("scaler", scaler)
+])
+
+CT = ColumnTransformer(
+    [
+        (
+            "encoder",
+            catpipe,
+            cats
+        ),
+        (
+            "scaler",
+            numpipe,
+            nums
+        ),
+    ],
+    remainder="passthrough"
+)
+
+pipe = Pipeline([
+    ("preproc", CT),
+    ("model", model)
+])
+
+search_space = u.get_pipe_search_space_one_encoder(model, encoder)
+cv = StratifiedKFold(n_splits=5)
+for tr, te in cv.split(X, y):
+    Xtr, Xte, ytr, yte = X.iloc[tr], X.iloc[te], y.iloc[tr], y.iloc[te]
+# out = cross_val_score(pipe, X, y, cv=cv, verbose=-1)
+
+    Xtrtr, Xtrval, ytrtr, ytrval = train_test_split(Xtr, ytr, test_size=0.5, random_state=11)
+    
+    Xtrtr.reset_index(drop=True, inplace=True)
+    ytrtr.reset_index(drop=True, inplace=True)
+    # Xtrtr, ytrtr = Xtr, ytr
+    
+    Xtrval, ytrval = Xtrval.reset_index(drop=True), ytrval.reset_index(drop=True)
+    
+    XIcat = cat_imputer.fit_transform(Xtrtr, ytrtr)
+    # XInum = num_imputer.fit_transform(XIcat, ytrtr)
+    
+    XIE = encoder.fit_transform(XIcat, ytrtr)
+    # XEEE = encoder.fit_transform(Xtrtr, ytrtr)
+    
+    XE = CT.fit_transform(Xtrtr, ytrtr)
+    if np.isnan(XE).sum():
+        print(np.isnan(XE).sum())
+        break
+    # pipe.fit(Xtrtr, ytrtr)
+    
+    Xtrans = CT.transform(Xtrval)
+    
+    pipe.fit(
+        Xtrtr, ytrtr, 
+        model__eval_set=[(Xtrans, ytrval)], 
+        model__eval_metric=u.get_lgbm_scoring(scoring), 
+        model__callbacks=[early_stopping(50, first_metric_only=True), log_evaluation(-1)]
+    )
+    
+
+#%%
+def custom_metric(y_true, y_pred):
+    metric_name = 'custom'
+    value = 0.1
+    is_higher_better = False
+    return metric_name, value, is_higher_better
+  
+def lgbm(scoring):
+    def lgbm_scoring(y_true, y_pred):
+        y_pred = np.round(y_pred)
+        return scoring.__name__, scoring(y_true, y_pred), True
+    return lgbm_scoring
+
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
+
+X_train, X_eval, y_train, y_eval = train_test_split(X.select_dtypes(exclude=("category", "object")), y, test_size=0.1, random_state=1)
+
+clf = LGBMClassifier(objective="binary", n_estimators=10000, random_state=1, metric="None", verbose=-1)
+eval_set = [(X_eval, y_eval)]
+
+clf.fit(
+    X_train,
+    y_train,
+    eval_set=eval_set,
+    early_stopping_rounds=100,
+    eval_metric=lgbm(u.accuracy_score),
+    verbose=1
+)
+print(u.accuracy_score(y_eval, clf.predict(X_eval)))
+
 
 #%% test retrieval
 

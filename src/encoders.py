@@ -38,6 +38,25 @@ from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
 import src.utils as u
 
 
+class DFImputer(object):
+    
+    def __init__(self, imputer):
+        self.imputer = imputer
+        
+    def fit(self, X, y, **kwargs):
+        self.imputer.fit(X, y)
+        return self
+        
+    def transform(self, X, **kwargs):
+        return pd.DataFrame(self.imputer.transform(X), index=X.index, columns=X.columns)
+    
+    def fit_transform(self, X, y, **kwargs):
+        return self.fit(X, y, **kwargs).transform(X)
+
+    def __str__(self):
+        return self.imputer.__class__.__name__
+
+
 class Encoder(BaseEstimator, TransformerMixin):
     def __init__(self, default=-1, **kwargs):
         self.default = default

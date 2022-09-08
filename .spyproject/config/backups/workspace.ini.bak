@@ -4,7 +4,7 @@ save_data_on_exit = True
 save_history = True
 save_non_project_files = False
 project_type = 'empty-project-type'
-recent_files = ['src\\test_rankings.py', 'src\\utils.py', 'src\\pack2server.py', 'src\\main5.py', 'src\\encoders.py', 'src\\test.py', 'src\\result_analysis_seaborn.py', 'src\\main6.py']
+recent_files = ['src\\test\\test_rankings.py', 'src\\ranking.py', 'src\\utils.py', 'src\\result_analysis_seaborn.py', 'src\\results_concator.py']
 
 [main]
 version = 0.2.0

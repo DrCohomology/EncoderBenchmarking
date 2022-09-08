@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 os.chdir(u.RESULT_FOLDER)
 
-experiment_name = "benchmark_motivation"
+experiment_name = "benchmark_motivation_5"
 
 results_folder = u.RESULT_FOLDER + "/" + experiment_name
 results_concated = results_folder + "\\_concated.csv"

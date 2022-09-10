@@ -12,6 +12,7 @@ import pandas as pd
 import time
 import warnings
 
+from scipy.stats import t
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score,
@@ -104,13 +105,89 @@ DATASETS = {
 }
 
 
+def t_test(v1, v2, alpha=0.05, corrected=True):
+    """
+    Test whether one of v1 or v2 is statistically greater than the other.
+    Assume v1 and v2 are results from a cross validation
+    Add Bengio correction term (2003)
+    """
+
+    n = len(v1)
+
+    diff = v1 - v2
+    avg = diff.mean()
+    std = diff.std()
+
+    # test training ratio
+    ttr = 1 / (n - 1)
+
+    adjstd = np.sqrt(1 / n + ttr) * std if corrected else np.sqrt(1 / n) * std
+    tstat = avg / adjstd
+
+    df = n - 1
+    crit = t.ppf(1.0 - alpha, df)
+    p = (1.0 - t.cdf(np.abs(tstat), df)) * 2.0
+    return tstat, df, crit, p
 
 
+def compare_with_ttest(v1, v2, alpha=0.05, corrected=True):
+    """
+    returns 0 if the two are equal
+    returns 1 if v1 is "greater than" v2
+    returns 2 if v2 is "greater than" v1
+
+    """
+
+    if (v1 == v2).all():
+        return 0, 1
+
+    tstat, df, crit, p = t_test(v1, v2, alpha=alpha, corrected=corrected)
+
+    if p >= alpha:
+        return 0, p
+    else:
+        if (v1 - v2).mean() > 0:
+            return 1, p
+        else:
+            return 2, p
+
+def get_dominating(R):
+    if np.linalg.norm(R - np.ones_like(R)) == 0:
+        return [set(range(len(R)))]
+
+    final_rank = []
+    non_dominated = []
+    R = R.copy()
+    for i in range(len(R)):
+        if R[i, :].sum() == len(R):
+            non_dominated.append(i)
+    # having found hte current non-dominated rows, we can "remove them"
+    for i in non_dominated:
+        R[i, :] = np.ones_like(R[i, :])
+        R[:, i] = np.ones_like(R[:, i])
+    final_rank = [set(non_dominated)]
+    final_rank.extend(get_dominating(R))
+    return final_rank
+
+def filter_rank(r):
+    return [r[0]] + [r[i]-r[i-1] for i in range(1, len(r))]
+
+def get_rank_from_matrix(R, e2i):
+    rank = {}
+
+    for E, i in e2i.items():
+        for j, dom in enumerate(filter_rank(get_dominating(R))):
+            if i in dom:
+                rank[E] = j
+                continue
+    return rank
 
 def get_lgbm_scoring(scoring):
     def lgbm_scoring(y_true, y_pred):
         return scoring.__name__, scoring(y_true, np.round(y_pred)), True
+
     return lgbm_scoring
+
 
 def cat2idx_dicts(domain) -> tuple:
     c2i, i2c = {}, {}
@@ -168,7 +245,7 @@ def get_pipe_search_space_one_encoder(model, encoder):
     # CatBoost paper: they tune just the number of trees
     elif isinstance(model, CatBoostClassifier):
         out = {
-            "model__iterations": Integer(1, 1000, prior="log-uniform")    
+            "model__iterations": Integer(1, 1000, prior="log-uniform")
         }
     elif isinstance(model, SVC):
         out = {
@@ -177,9 +254,9 @@ def get_pipe_search_space_one_encoder(model, encoder):
         }
     elif isinstance(model, KNeighborsClassifier):
         out = {
-            "model__n_neighbors": Integer(2, 10)    
+            "model__n_neighbors": Integer(2, 10)
         }
-    
+
     else:
         raise ValueError(
             f"Model with representation {repr(model)} is not valid")
@@ -193,13 +270,14 @@ def get_pipe_search_space_one_encoder(model, encoder):
     #         "preproc__encoder__n_splits": Integer(2, 10)
     #     })
     return out
-    
+
+
 def tune_pipe(pipe, X, y, search_space, score, random_state=1444, n_jobs=-1, max_iter=20, n_splits=5, verbose=0):
     start = time.time()
     cv = StratifiedKFold(
         n_splits=n_splits, random_state=random_state, shuffle=True
     )
-    
+
     n_iter = 1
     for par_space in search_space.values():
         if isinstance(par_space, Integer):
@@ -209,7 +287,7 @@ def tune_pipe(pipe, X, y, search_space, score, random_state=1444, n_jobs=-1, max
         else:
             n_iter *= 3
     n_iter = min(n_iter, max_iter)
-    
+
     BS = BayesSearchCV(
         pipe,
         search_spaces=search_space,
@@ -217,7 +295,7 @@ def tune_pipe(pipe, X, y, search_space, score, random_state=1444, n_jobs=-1, max
         cv=cv,
         verbose=verbose,
         n_iter=n_iter,
-        random_state=random_state+1,
+        random_state=random_state + 1,
         scoring=score,
         refit=True
     )
@@ -240,6 +318,3 @@ def get_acronym(string, underscore=True):
         if c.isupper() or c.isdigit():
             out += c
     return out + "_" if underscore else out
-
-
-

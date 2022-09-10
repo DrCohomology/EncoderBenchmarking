@@ -364,7 +364,7 @@ if __name__ == "__main__":
         number_iterations *= len(l)
 
     iteration_cost = 20
-days = number_iterations*iteration_cost / (3600*24)
+    days = number_iterations*iteration_cost / (3600*24)
     print(f"{number_iterations} iterations at {iteration_cost} seconds each = {round(days,1)} days")
 
     # -- Testing?

@@ -66,7 +66,36 @@ import src.utils as u
 
 from sklearn.model_selection import train_test_split
 
+#%% rank agreement
+def agreement(df, r1, r2, strict=False):
+    score = 0
+    for enc1, data1 in df.iterrows():
+        for enc2, data2 in df.iterrows():
+            # if enc1 is better than enc2 according to r1, but not according to r2 -> problem
+            # same as opposite holds.
+            # ie if the rankings disagree or not
+            # if two are equal according to a rank, keep it as a refinement and do not penalize. Can be improved
+            if strict:
+                if (data1[r1]-data2[r1]) * (data1[r2]-data2[r2]) > 0:
+                    score += 1
+            else:
+                if (data1[r1]-data2[r1]) * (data1[r2]-data2[r2]) >= 0:
+                    score += 1
+    score /= len(df)**2
+    return score
 
+print("-"*10, "Loosen agreement:")
+for r1, r2 in product(df_ranks.columns, repeat=2):
+    # stupid condition
+    if r1 < r2:
+        print(r1, r2, agreement(df_ranks, r1, r2, strict=False))
+
+
+print("-"*10, " Strict agreement:")
+for r1, r2 in product(df_ranks.columns, repeat=2):
+    # stupid condition
+    if r1 < r2:
+        print(r1, r2, agreement(df_ranks, r1, r2, strict=True))
 
 #%% LEV distance
 

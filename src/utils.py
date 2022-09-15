@@ -12,6 +12,8 @@ import pandas as pd
 import time
 import warnings
 
+from functools import reduce
+from itertools import product
 from scipy.stats import t
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
@@ -111,12 +113,16 @@ def t_test(v1, v2, alpha=0.05, corrected=True):
     Assume v1 and v2 are results from a cross validation
     Add Bengio correction term (2003)
     """
+    if len(v1) != len(v2):
+        raise ValueError("The inputs should have equal length.")
 
     n = len(v1)
 
     diff = v1 - v2
     avg = diff.mean()
     std = diff.std()
+    if std == 0:
+        return 0, 0, 0, 0
 
     # test training ratio
     ttr = 1 / (n - 1)
@@ -127,12 +133,10 @@ def t_test(v1, v2, alpha=0.05, corrected=True):
     df = n - 1
     crit = t.ppf(1.0 - alpha, df)
     p = (1.0 - t.cdf(np.abs(tstat), df)) * 2.0
-    return tstat, df, crit, p
-
-
+    return p, tstat, df, crit
 def compare_with_ttest(v1, v2, alpha=0.05, corrected=True):
     """
-    returns 0 if the two are equal
+    returns 0 if the two are indistinguishable
     returns 1 if v1 is "greater than" v2
     returns 2 if v2 is "greater than" v1
 
@@ -141,7 +145,7 @@ def compare_with_ttest(v1, v2, alpha=0.05, corrected=True):
     if (v1 == v2).all():
         return 0, 1
 
-    tstat, df, crit, p = t_test(v1, v2, alpha=alpha, corrected=corrected)
+    p, s1, s2, s3 = t_test(v1, v2, alpha=alpha, corrected=corrected)
 
     if p >= alpha:
         return 0, p
@@ -150,45 +154,82 @@ def compare_with_ttest(v1, v2, alpha=0.05, corrected=True):
             return 1, p
         else:
             return 2, p
-
 def get_dominating(R):
+    """
+    Retrieves the indices of non-dominated elements and "removes" them from the matrix.
+    At the end of the recursive process, the result is a list of nested sets.
+    """
     if np.linalg.norm(R - np.ones_like(R)) == 0:
         return [set(range(len(R)))]
 
-    final_rank = []
     non_dominated = []
     R = R.copy()
     for i in range(len(R)):
         if R[i, :].sum() == len(R):
             non_dominated.append(i)
-    # having found hte current non-dominated rows, we can "remove them"
+    # having found the index of non-dominated rows, we can make the corresponding columns ininfluent
+    # ie make the other indices dominate also the dominating indices
     for i in non_dominated:
         R[i, :] = np.ones_like(R[i, :])
         R[:, i] = np.ones_like(R[:, i])
     final_rank = [set(non_dominated)]
     final_rank.extend(get_dominating(R))
     return final_rank
-
 def filter_rank(r):
+    """
+    Transforms a list of nested sets into a list of increments
+    """
     return [r[0]] + [r[i]-r[i-1] for i in range(1, len(r))]
-
+def test_totality(R):
+    """
+    Tests for totality of a relation. Bonus come riflexivity.
+    """
+    if len(R.shape) >= 3 or R.shape[0] != R.shape[1]:
+        raise ValueError(f"The input should be a square matrix but has shape {R.shape}.")
+    return reduce(
+        lambda x, y: x and y,
+        [
+            R[i, j] + R[j, i] >= 1
+            for i, j in product(range(len(R)), repeat=2)
+        ]
+    )
+def test_transitivity(R):
+    if len(R.shape) >= 3 or R.shape[0] != R.shape[1]:
+        raise ValueError(f"The input should be a square matrix but has shape {R.shape}.")
+    return reduce(
+        lambda x, y: x and y,
+        [
+            R[i, j] + R[j, k] - R[i, k] <= 1
+            for i, j, k in product(range(len(R)), repeat=3)
+        ]
+    )
 def get_rank_from_matrix(R, e2i):
-    rank = {}
+    """
+    If the matrix satisfies totality, riflexivity, and transitivity properties (ie weak order), extract the rank
+    of every element that is key in e2i.
+    Two procedures are possible:
+        best first: take rows with maximum sum (dominating everything)
+        worst frst: take columns with maximum sum (dominated by everything)
+    """
 
+    # test for totality
+    if not test_totality(R):
+        raise ValueError("Input matrix is not a total relation, hence not a weak order.")
+    elif not test_transitivity(R):
+        raise ValueError("Input matrix is not a transitive relation, hence not a weak order.")
+
+    rank = {}
     for E, i in e2i.items():
         for j, dom in enumerate(filter_rank(get_dominating(R))):
             if i in dom:
                 rank[E] = j
                 continue
     return rank
-
 def get_lgbm_scoring(scoring):
     def lgbm_scoring(y_true, y_pred):
         return scoring.__name__, scoring(y_true, np.round(y_pred)), True
 
     return lgbm_scoring
-
-
 def cat2idx_dicts(domain) -> tuple:
     c2i, i2c = {}, {}
     idx = 0
@@ -197,17 +238,11 @@ def cat2idx_dicts(domain) -> tuple:
         i2c[idx] = cat
         idx += 1
     return c2i, i2c
-
-
 def mean_squared_score(x):
     return np.exp(-x)
-
-
 def cohen_kappa(y_true, y_pred):
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     return 2 * (tp * tn - fn * fp) / ((tp + fp) * (fp + tn) + (tp + fn) * (fn + tn))
-
-
 def get_pipe_search_space_one_encoder(model, encoder):
     out = {}
 
@@ -270,8 +305,6 @@ def get_pipe_search_space_one_encoder(model, encoder):
     #         "preproc__encoder__n_splits": Integer(2, 10)
     #     })
     return out
-
-
 def tune_pipe(pipe, X, y, search_space, score, random_state=1444, n_jobs=-1, max_iter=20, n_splits=5, verbose=0):
     start = time.time()
     cv = StratifiedKFold(
@@ -310,8 +343,6 @@ def tune_pipe(pipe, X, y, search_space, score, random_state=1444, n_jobs=-1, max
         },
         BS,
     )
-
-
 def get_acronym(string, underscore=True):
     out = ""
     for c in string.split("(")[0]:

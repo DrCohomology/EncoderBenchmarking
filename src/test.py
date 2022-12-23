@@ -4,35 +4,42 @@ Created on Mon Feb 21 14:44:13 2022
 
 @author: federicom
 """
+import glob
 import itertools
 import json
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import openml
+import os
 import pandas as pd
+import random
+import re
 import sklearn
+import string
 import time
 
 from catboost import CatBoostClassifier
 from collections import defaultdict, Counter
+from functools import reduce
 from imblearn.under_sampling import NearMiss, RandomUnderSampler
 from imblearn.pipeline import make_pipeline
 from joblib import Parallel, delayed
-from category_encoders import (
-    BackwardDifferenceEncoder,
-    CatBoostEncoder,
-    OneHotEncoder,
-    CountEncoder,
-    BinaryEncoder,
-)
+from importlib import reload
+from itertools import product
 from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 from numba import njit
 from openml.datasets import edit_dataset, fork_dataset, get_dataset
-from scipy.stats import chi2_contingency
+from rpy2.robjects.packages import importr
+from scipy.stats import chi2_contingency, spearmanr, kendalltau
+import seaborn as sns
 from skopt import BayesSearchCV
 from skopt.space import Real, Categorical, Integer
+from statsmodels.genmod.bayes_mixed_glm import BinomialBayesMixedGLM as bgmm
 from tqdm import tqdm
 
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
@@ -52,8 +59,6 @@ from sklearn.model_selection import (
     cross_val_score,
     cross_validate
 )
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
 from sklearn.svm import SVC
@@ -61,12 +66,608 @@ from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 import src.encoders as e
 import src.utils as u
+import src.results_concatenator as rc
+reload(e)
+reload(u)
+reload(rc)
 
-# LGBM test
+import category_encoders
+reload(category_encoders)
 
-from sklearn.model_selection import train_test_split
 
-#%% rank agreement
+
+
+#%% Identify the missing 30th small dataset
+
+# candidate: adult
+dataset = "adult"
+completed_dataset = "kr-vs-kp"
+
+df_notuning = rc.concatenate_results("29dats")
+df = rc.concatenate_results("main6 results with tuning and 6-encoders")
+
+required_encs = df_notuning.encoder.unique()
+completed_encs = df.loc[df.dataset == dataset].encoder.unique()
+
+required_models = df_notuning.model.unique()
+completed_models = df.loc[df.dataset == dataset].model.unique()
+
+torun_encs = set(required_encs) - set(completed_encs)
+torun_models = set(required_models) - set(completed_models)
+
+# print(torun_encs)
+# print(torun_models)
+
+pk = ["encoder", "model", "scoring"]
+dfe = df.loc[df.dataset == dataset].set_index(pk)
+dfc = df.loc[df.dataset == completed_dataset].set_index(pk)
+
+torun = set(dfc.index) - set(dfe.index)
+for encoder, model, scoring in torun:
+    print(encoder, model, scoring)
+
+
+
+
+
+
+#%%
+
+X, y, categorical_indicator, attribute_names = get_dataset(u.DATASETS[dataset]).get_data(
+    target=get_dataset(u.DATASETS[dataset], download_data=False).default_target_attribute, dataset_format="dataframe"
+)
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all")
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
+
+X.reset_index(drop=True, inplace=True)
+y.reset_index(drop=True, inplace=True)
+
+cats = X.select_dtypes(include=("category", "object")).columns
+nums = X.select_dtypes(exclude=("category", "object")).columns
+
+cat_imputer = e.DFImputer(u.SimpleImputer(strategy="most_frequent"))
+num_imputer = e.DFImputer(u.SimpleImputer(strategy="median"))
+
+scaler = u.RobustScaler()
+solvers = ["lbfgs", "saga", "liblinear"]
+model = None
+scoring = u.roc_auc_score
+
+importr("lme4")
+importr("base")
+importr("utils")
+
+encoders = [e.OneHotEncoder(), e.DropEncoder()]
+run = True
+if run:
+    runtimes = defaultdict(lambda: [])
+    scores = defaultdict(lambda: [])
+    cv = StratifiedKFold(n_splits=5, random_state=None)
+    for icv, (tr, te) in tqdm(enumerate(cv.split(X, y))):
+        Xtr, Xte, ytr, yte = X.iloc[tr], X.iloc[te], y.iloc[tr], y.iloc[te]
+        Xtr, ytr = Xtr.reset_index(drop=True), ytr.reset_index(drop=True)
+        Xte, yte = Xte.reset_index(drop=True), yte.reset_index(drop=True)
+
+        for encoder in encoders:
+            cats = X.select_dtypes(include=("category", "object")).columns
+            nums = X.select_dtypes(exclude=("category", "object")).columns
+            catpipe = Pipeline([("imputer", cat_imputer), ("encoder", encoder)])
+            numpipe = Pipeline([("imputer", num_imputer), ("scaler", scaler)])
+            prepipe = ColumnTransformer([("encoder", catpipe, cats), ("scaler", numpipe, nums)],
+                                        remainder="passthrough")
+
+            XEtr = prepipe.fit_transform(Xtr, ytr)
+            for solver in solvers:
+                model = u.LogisticRegression(solver=solver)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    s = time.time()
+                    model.fit(XEtr, ytr)
+                    runtimes[solver].append(time.time() - s)
+
+                scores[solver].append(scoring(yte, model.predict(prepipe.transform(Xte))))
+
+    runtimes = pd.DataFrame(runtimes)
+    scores = pd.DataFrame(scores)
+
+fig, axes = plt.subplots(1, 2)
+fig.suptitle(f"{dataset}, shape: {X.shape}")
+ax = axes[0]
+ax.set_title("Run time")
+sns.boxplot(runtimes, ax=ax)
+ax = axes[1]
+ax.set_title(scoring.__name__)
+sns.boxplot(scores, ax=ax)
+
+plt.tight_layout()
+plt.show()
+
+
+#%%
+experiment_name = "complete results"
+df = rc.concatenate_results(experiment_name, clean=False)
+
+df = df.loc[df.dataset.isin(["adult"])]
+
+encs = ["DE", "OHE", "RGLMME", "CV5RGLMME"]
+
+fig, axes = plt.subplots(1, len(encs), sharey="all")
+fig.suptitle("Runtimes in hours for the adult dataset")
+for ax, enc in zip(axes.flatten(), encs):
+
+    dfe = df.loc[df.encoder == enc]
+    # ax.set_title(f"{enc}")
+    ax.boxplot(dfe.tuning_time / 3600)
+    ax.set_yscale("log")
+    ax.set_xlabel(f"{enc}")
+    ax.set_xticks([])
+plt.show()
+
+mods = df.model.unique()
+fig, axes = plt.subplots(1, len(mods), sharey="all")
+fig.suptitle("Runtimes in hours for the adult dataset")
+for ax, mod in zip(axes.flatten(), mods):
+    dfe = df.loc[df.model == mod]
+    ax.boxplot(dfe.tuning_time / 3600)
+    ax.set_yscale("log")
+    ax.set_xlabel(f"{mod}")
+    ax.set_xticks([])
+plt.show()
+#%%
+fig, axes = plt.subplots(len(mods), len(encs), sharey="all", figsize=(10, 10))
+fig.suptitle("Runtimes in hours for the adult dataset")
+for axs, mod in zip(axes, mods):
+    for ax, enc in zip(axs, encs):
+        ax.set_ylabel(f"{u.get_acronym(mod, underscore=False)}")
+        dfe = df.loc[(df.model == mod) & (df.encoder == enc)]
+        ax.boxplot(dfe.tuning_time / 3600)
+        ax.set_yscale("log")
+        ax.set_xlabel(f"{enc}")
+        ax.set_xticks([])
+
+plt.show()
+
+#%%
+r1 = [1, 1, 3, 1, 4.5, 4.5, 6]
+r2 = [6, 1, 3, 3, 3, 5, 0]
+
+r1d = [0, 0, 1, 0, 2, 2, 3]
+r2d = [4, 1, 2, 2, 2, 3, 0]
+
+print("not dense")
+print(spearmanr(r1, r2).correlation)
+print(kendalltau(r1, r2).correlation)
+print(kendalltau(r1, r2, variant='c').correlation)
+
+print("dense")
+print(spearmanr(r2d, r1d).correlation)
+print(kendalltau(r2d, r1d).correlation)
+print(kendalltau(r2d, r1d, variant='c').correlation)
+
+
+#%% is RGLMME faster?
+did = u.DATASETS["adult"]
+
+X, y, categorical_indicator, attribute_names = get_dataset(did).get_data(
+    target=get_dataset(did, download_data=False).default_target_attribute, dataset_format="dataframe"
+)
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all")
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
+
+X.reset_index(drop=True, inplace=True)
+y.reset_index(drop=True, inplace=True)
+
+cats = X.select_dtypes(include=("category", "object")).columns
+nums = X.select_dtypes(exclude=("category", "object")).columns
+
+cat_imputer = e.DFImputer(u.SimpleImputer(strategy="most_frequent"))
+num_imputer = e.DFImputer(u.SimpleImputer(strategy="median"))
+
+scaler = u.RobustScaler()
+model = u.LGBMClassifier()
+
+encoders = [e.GLMMEncoder(), e.RGLMMEncoder(rlibs=None)]
+
+runtime = {}
+for encoder in tqdm(encoders):
+    catpipe = Pipeline([
+        ("imputer", cat_imputer),
+        ("encoder", encoder)
+    ])
+    numpipe = Pipeline([
+        ("imputer", num_imputer),
+        ("scaler", scaler)
+    ])
+
+    CT = ColumnTransformer(
+        [
+            (
+                "encoder",
+                catpipe,
+                cats
+            ),
+            (
+                "scaler",
+                numpipe,
+                nums
+            ),
+        ],
+        remainder="passthrough"
+    )
+
+    pipe = Pipeline([
+        ("preproc", CT),
+        ("model", model)
+    ])
+
+
+    start = time.time()
+    pipe.fit(X, y)
+    runtime[str(encoder)] = time.time() - start
+
+
+
+#%%
+
+# load df_concatenated
+result_folder = os.path.join(u.RESULT_FOLDER, "big_benchmark_backup")
+df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+
+
+#%% statsmodels is slow af
+
+df = pd.read_csv(u.DATASET_FOLDER + "/adult.csv")
+df["target"] = e.LabelEncoder().fit_transform(df["target"])
+
+# 2: with factors, 3: with another formula
+df_ = df.copy()[["cat_0", "target"]]
+df_.columns = ["x", "y"]
+
+
+# ---- inner part
+df2 = df_.copy()
+
+
+# OE = e.OrdinalEncoder()
+# df2.x = OE.fit_transform(df2.x, df2.y)
+start = time.time()
+
+model2 = bgmm.from_formula('y ~ 1', {'coefficient': '0 + C(x)'}, df2).fit_vb() # C(X) -> treat x as categorical
+timetime = time.time() - start
+
+# col_0
+better_names = [re.search(r"\[(.+)\]", index_name).groups()[0] for index_name in model2.model.vc_names]
+estimate2 = pd.Series(model2.vc_mean, index=better_names)
+
+print("GLMM time: ", timetime)
+
+# ---- whole encoder
+
+df2 = df_.copy()
+GE = category_encoders.GLMMEncoder()
+start = time.time()
+GE.fit(df2.x, df2.y)
+b = GE.transform(df2.x)
+tim = time.time() - start
+
+print("encoder time: ", tim)
+
+# %% is BayesSearch very slow? No
+
+did = u.DATASETS["Agrawal1"]
+
+X, y, categorical_indicator, attribute_names = get_dataset(did).get_data(
+    target=get_dataset(did, download_data=False).default_target_attribute, dataset_format="dataframe"
+)
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all")
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
+
+X.reset_index(drop=True, inplace=True)
+y.reset_index(drop=True, inplace=True)
+
+cats = X.select_dtypes(include=("category", "object")).columns
+nums = X.select_dtypes(exclude=("category", "object")).columns
+
+cat_imputer = e.DFImputer(u.SimpleImputer(strategy="most_frequent"))
+num_imputer = e.DFImputer(u.SimpleImputer(strategy="median"))
+
+encoder = e.Discretized(e.TargetEncoder())
+# encoder = e.CVRegularized(e.GLMMEncoder())
+scaler = u.RobustScaler()
+model = SVC()
+
+catpipe = Pipeline([
+    ("imputer", cat_imputer),
+    ("encoder", encoder)
+])
+numpipe = Pipeline([
+    ("imputer", num_imputer),
+    ("scaler", scaler)
+])
+
+CT = ColumnTransformer(
+    [
+        (
+            "encoder",
+            catpipe,
+            cats
+        ),
+        (
+            "scaler",
+            numpipe,
+            nums
+        ),
+    ],
+    remainder="passthrough"
+)
+
+pipe = Pipeline([
+    ("preproc", CT),
+    # ("second_imputation", num_imputer),
+    ("model", model)
+])
+
+bayes_search_space = {
+    "model__C": Real(0.1, 2),
+    "model__gamma": Real(0.1, 100, prior="log-uniform")
+}
+grid_search_space = {
+    "model__C": [0.1, 0.5, 1, 2],
+    "model__gamma": [0.1, 1, 10, 100]
+}
+
+score = accuracy_score
+
+cv = StratifiedKFold(
+    n_splits=3, random_state=1000, shuffle=True
+)
+
+GS = GridSearchCV(pipe, param_grid=grid_search_space, n_jobs=1, cv=cv, scoring=score)
+BS = BayesSearchCV(
+    pipe,
+    search_spaces=bayes_search_space,
+    n_jobs=1,
+    cv=cv,
+    verbose=False,
+    n_iter=16,
+    random_state=10 + 1,
+    scoring=score,
+    refit=True
+)
+
+tgrids = []
+tbayess = []
+tpipes = []
+for _ in tqdm(range(0)):
+    start = time.time()
+    pipe.fit(X, y)
+    tpipes.append(time.time() - start)
+
+    print("Yeha")
+    start = time.time()
+    GS.fit(X, y)
+    tgrids.append(time.time() - start)
+
+    print("OH")
+
+    start = time.time()
+    BS.fit(X, y)
+    tbayess.append(time.time() - start)
+
+tgrid = np.array(tgrids)
+tbayes = np.array(tbayess)
+
+print(f"Grid: {tgrid.mean()}; Bayes: {tbayes.mean()}")
+
+# %% encoder mimicking the splitting structure of a decision tree
+
+from sklearn import clone
+
+did = u.DATASETS["KDDCup09_appetency"]
+
+X, y, categorical_indicator, attribute_names = get_dataset(did).get_data(
+    target=get_dataset(did, download_data=False).default_target_attribute, dataset_format="dataframe"
+)
+
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all")
+y = pd.Series(e.LabelEncoder().fit_transform(
+    y[X.index]), name="target")
+
+X.reset_index(drop=True, inplace=True)
+y.reset_index(drop=True, inplace=True)
+
+cats = X.select_dtypes(include=("category", "object")).columns
+nums = X.select_dtypes(exclude=("category", "object")).columns
+
+cat_imputer = e.DFImputer(u.SimpleImputer(strategy="most_frequent"))
+num_imputer = e.DFImputer(u.SimpleImputer(strategy="median"))
+
+encoder = e.Discretized(e.TargetEncoder())
+scaler = u.RobustScaler()
+model = SVC()
+
+catpipe = Pipeline([
+    ("imputer", cat_imputer),
+    ("encoder", encoder)
+])
+numpipe = Pipeline([
+    ("imputer", num_imputer),
+    ("scaler", scaler)
+])
+
+CT = ColumnTransformer(
+    [
+        (
+            "encoder",
+            catpipe,
+            cats
+        ),
+        (
+            "scaler",
+            numpipe,
+            nums
+        ),
+    ],
+    remainder="passthrough"
+)
+
+pipe = Pipeline([
+    ("preproc", CT),
+    # ("second_imputation", num_imputer),
+    ("model", model)
+])
+
+# TE = e.TargetEncoder()
+# DTE = e.Discretized(e.TargetEncoder())
+#
+# a = DTE.fit_transform(X[cats], y)
+# b = TE.fit_transform(X[cats], y)
+#
+# print(np.isnan(b).sum())
+
+pipe.fit(X, y)
+ypr = pipe.predict(X)
+print(ypr.shape)
+
+
+# %% DTE
+
+
+def gini(x: np.ndarray):
+    return np.sum(np.abs([xi - xj for xi, xj in product(x, repeat=2)])) / (2 * len(x) * x.sum())
+
+
+def gini_impurity(x: np.ndarray):
+    return 1 - (np.mean(x == 0) ** 2 + np.mean(x == 1) ** 2)
+
+
+class MySplitter:
+
+    def __init__(self):
+        self.thresholds = {}
+
+    def fit(self, X, y=None):
+        X = X.copy()
+        for col in X.columns:
+            lowest_impurity_thr = None
+            lowest_impurity = np.infty
+            for i, thr in enumerate(sorted(X[col].unique())):
+                if i == len(X[col].unique()) - 1:
+                    break
+                y1 = y.loc[X[col] <= thr]
+                y2 = y.loc[X[col] > thr]
+
+                g1 = gini_impurity(y1)
+                g2 = gini_impurity(y2)
+
+                w1 = len(y1) / len(y)
+                w2 = len(y2) / len(y)
+
+                impurity = np.inner((w1, w2), (g1, g2))
+
+                if impurity < lowest_impurity:
+                    lowest_impurity = impurity
+                    lowest_impurity_thr = thr
+            self.thresholds[col] = lowest_impurity_thr
+        return self
+
+    def transform(self, X, y=None):
+        pass
+
+
+"""
+This implementation is stupid and does not work: I am just learnin a TargetEncoder in a more complicated way. 
+Ideally, what I would have is a blowup of dimensions, where I split eacgh column according to every other column. 
+Or I can just split according to the most promising column, ie perfect up to first layer of DT
+"""
+
+
+class DTEncoder(e.Encoder):
+    def __init__(self, splitter=MySplitter(), base_encoder: e.Encoder() = e.TargetEncoder(), default=-1, **kwargs):
+        super().__init__(default=default, **kwargs)
+        self.splitter = splitter
+        self.base_encoder = base_encoder
+        self.fold_encoders = {}
+        self.initial_encoder = e.TargetEncoder()
+        self.thresholds = {}
+
+    def fit(self, X: pd.DataFrame, y=None, **kwargs):
+        """
+        Encode columns with TE
+        Split the columns according to the thresholds, encode each part with its own EargetEncoder
+        """
+        X = X.copy()
+
+        self.cols = X.columns
+
+        self.fold_encoders = {
+            col: [clone(self.base_encoder) for _ in range(2)]
+            for col in self.cols
+        }
+
+        XE = self.initial_encoder.fit_transform(X, y)
+        self.thresholds = self.splitter.fit(XE, y).thresholds
+
+        for col in self.cols:
+            c1 = XE[col] <= self.thresholds[col]
+            c2 = XE[col] > self.thresholds[col]
+
+            self.fold_encoders[col][0].fit(X.loc[c1, col].to_frame(), y.loc[c1])
+            self.fold_encoders[col][1].fit(X.loc[c2, col].to_frame(), y.loc[c2])
+
+            enc0 = self.fold_encoders[col][0].encoding[col]
+            enc1 = self.fold_encoders[col][1].encoding[col]
+
+            temp = {
+                cat: (enc0[cat], enc1[cat])
+                for cat in set(enc0.keys()).union(set(enc1.keys()))
+            }
+
+            self.encoding[col].update(temp)
+
+        return self
+
+    def transform(self, X: pd.DataFrame, y=None, **kwargs):
+        X = X.copy().astype(object)
+
+        # defines the splits
+        XE = self.initial_encoder.transform(X)
+
+        for col in self.cols:
+            c1 = XE[col] <= self.thresholds[col]
+            c2 = XE[col] > self.thresholds[col]
+
+            X.loc[c1, col] = self.fold_encoders[col][0].transform(X.loc[c1, col].to_frame())
+            X.loc[c2, col] = self.fold_encoders[col][1].transform(X.loc[c2, col].to_frame())
+
+        return X.applymap(float)
+
+
+X, y, categorical_indicator, attribute_names = get_dataset(1590).get_data(
+    target=get_dataset(1590, download_data=False).default_target_attribute, dataset_format="dataframe"
+)
+
+X = X.iloc[:2000]
+
+cats = X.select_dtypes(include=("category", "object")).columns
+nums = X.select_dtypes(exclude=("category", "object")).columns
+
+y = pd.Series(e.LabelEncoder().fit_transform(y[X.index]), name="target")
+
+DTE = DTEncoder()
+DTE.fit(X[cats], y)
+
+TE = e.TargetEncoder()
+TE.fit(X[cats], y)
+
+X1 = DTE.transform(X[cats])
+X2 = TE.transform(X[cats])
+
+
+# %% rank agreement
 def agreement(df, r1, r2, strict=False):
     score = 0
     for enc1, data1 in df.iterrows():
@@ -76,28 +677,28 @@ def agreement(df, r1, r2, strict=False):
             # ie if the rankings disagree or not
             # if two are equal according to a rank, keep it as a refinement and do not penalize. Can be improved
             if strict:
-                if (data1[r1]-data2[r1]) * (data1[r2]-data2[r2]) > 0:
+                if (data1[r1] - data2[r1]) * (data1[r2] - data2[r2]) > 0:
                     score += 1
             else:
-                if (data1[r1]-data2[r1]) * (data1[r2]-data2[r2]) >= 0:
+                if (data1[r1] - data2[r1]) * (data1[r2] - data2[r2]) >= 0:
                     score += 1
-    score /= len(df)**2
+    score /= len(df) ** 2
     return score
 
-print("-"*10, "Loosen agreement:")
+
+print("-" * 10, "Loosen agreement:")
 for r1, r2 in product(df_ranks.columns, repeat=2):
     # stupid condition
     if r1 < r2:
         print(r1, r2, agreement(df_ranks, r1, r2, strict=False))
 
-
-print("-"*10, " Strict agreement:")
+print("-" * 10, " Strict agreement:")
 for r1, r2 in product(df_ranks.columns, repeat=2):
     # stupid condition
     if r1 < r2:
         print(r1, r2, agreement(df_ranks, r1, r2, strict=True))
 
-#%% LEV distance
+# %% LEV distance
 
 dataset = get_dataset(1590)
 X, y, categorical_indicator, attribute_names = dataset.get_data(
@@ -111,6 +712,7 @@ y = pd.Series(e.LabelEncoder().fit_transform(
 X.reset_index(drop=True, inplace=True)
 y.reset_index(drop=True, inplace=True)
 
+
 def lev_dist(a, b):
     def min_dist(s1, s2):
 
@@ -122,31 +724,31 @@ def lev_dist(a, b):
             return min_dist(s1 + 1, s2 + 1)
 
         return 1 + min(
-            min_dist(s1, s2 + 1),      # insert character
-            min_dist(s1 + 1, s2),      # delete character
+            min_dist(s1, s2 + 1),  # insert character
+            min_dist(s1 + 1, s2),  # delete character
             min_dist(s1 + 1, s2 + 1),  # replace character
         )
 
     return min_dist(0, 0)
-    
+
+
 for s1, s2 in itertools.product(X.education.unique(), repeat=2):
     print(s1, s2, lev_dist(s1, s2))
 
-    
 
-
-#%%
+# %%
 
 class RandomModel():
-    
+
     def __init__(self):
         pass
-    
+
     def fit(self, X, y):
         return self
-    
+
     def predict(self, X):
         return pd.Series(np.random.randint(0, 2, len(X)))
+
 
 np.random.seed(32)
 n = 10000
@@ -156,7 +758,6 @@ m = np.random.randint(0, 2, (n, l))
 
 X = pd.DataFrame(m)
 y = (np.average(m, axis=1).round())
-
 
 # model1 = RandomModel()
 model1 = RandomForestClassifier()
@@ -182,21 +783,24 @@ except:
 test_acc = scoring(yte, model1.predict(Xte))
 pred_test_acc = scoring((yte != model1.predict(Xte)).astype(int), model2.predict(Xte))
 
-print(f"train: {train_acc:.04f}, test: {test_acc:.04f}, pred_train: {pred_train_acc:.04f}, pred_test: {pred_test_acc:.04f}")
+print(
+    f"train: {train_acc:.04f}, test: {test_acc:.04f}, pred_train: {pred_train_acc:.04f}, pred_test: {pred_test_acc:.04f}")
 
-#%%
+# %%
 
 odf = openml.datasets.list_datasets(output_format="dataframe")
 cat1 = odf.loc[(odf.NumberOfClasses > 0) & (odf.NumberOfSymbolicFeatures >= 2)].shape[0]
-cat2 = odf.loc[((odf.NumberOfClasses == 0) | (odf.NumberOfClasses.isna())) & (odf.NumberOfSymbolicFeatures >= 1)].shape[0]
+cat2 = odf.loc[((odf.NumberOfClasses == 0) | (odf.NumberOfClasses.isna())) & (odf.NumberOfSymbolicFeatures >= 1)].shape[
+    0]
 num1 = odf.loc[(odf.NumberOfClasses > 0) & (odf.NumberOfSymbolicFeatures < 2)].shape[0]
-num2 = odf.loc[((odf.NumberOfClasses == 0) | (odf.NumberOfClasses.isna())) & (odf.NumberOfSymbolicFeatures < 1)].shape[0]
+num2 = odf.loc[((odf.NumberOfClasses == 0) | (odf.NumberOfClasses.isna())) & (odf.NumberOfSymbolicFeatures < 1)].shape[
+    0]
 
 bc = odf.loc[odf.NumberOfClasses == 2].shape[0]
 
 print(f'BC: {bc}')
-print(f"total: {odf.shape[0]}, cat: {cat1+cat2}, num: {num1+num2}")
-#%%
+print(f"total: {odf.shape[0]}, cat: {cat1 + cat2}, num: {num1 + num2}")
+# %%
 dataset = get_dataset(1169)
 X, y, categorical_indicator, attribute_names = dataset.get_data(
     target=dataset.default_target_attribute, dataset_format="dataframe"
@@ -221,11 +825,11 @@ model = u.LGBMClassifier(random_state=3, n_estimators=500, metric="None", verbos
 scoring = u.roc_auc_score
 
 catpipe = Pipeline([
-    ("imputer", cat_imputer), 
+    ("imputer", cat_imputer),
     ("encoder", encoder)
-]) 
+])
 numpipe = Pipeline([
-    # ("imputer", num_imputer), 
+    # ("imputer", num_imputer),
     ("scaler", scaler)
 ])
 
@@ -254,55 +858,59 @@ search_space = u.get_pipe_search_space_one_encoder(model, encoder)
 cv = StratifiedKFold(n_splits=5)
 for tr, te in cv.split(X, y):
     Xtr, Xte, ytr, yte = X.iloc[tr], X.iloc[te], y.iloc[tr], y.iloc[te]
-# out = cross_val_score(pipe, X, y, cv=cv, verbose=-1)
+    # out = cross_val_score(pipe, X, y, cv=cv, verbose=-1)
 
     Xtrtr, Xtrval, ytrtr, ytrval = train_test_split(Xtr, ytr, test_size=0.5, random_state=11)
-    
+
     Xtrtr.reset_index(drop=True, inplace=True)
     ytrtr.reset_index(drop=True, inplace=True)
     # Xtrtr, ytrtr = Xtr, ytr
-    
+
     Xtrval, ytrval = Xtrval.reset_index(drop=True), ytrval.reset_index(drop=True)
-    
+
     XIcat = cat_imputer.fit_transform(Xtrtr, ytrtr)
     # XInum = num_imputer.fit_transform(XIcat, ytrtr)
-    
+
     XIE = encoder.fit_transform(XIcat, ytrtr)
     # XEEE = encoder.fit_transform(Xtrtr, ytrtr)
-    
+
     XE = CT.fit_transform(Xtrtr, ytrtr)
     if np.isnan(XE).sum():
         print(np.isnan(XE).sum())
         break
     # pipe.fit(Xtrtr, ytrtr)
-    
+
     Xtrans = CT.transform(Xtrval)
-    
+
     pipe.fit(
-        Xtrtr, ytrtr, 
-        model__eval_set=[(Xtrans, ytrval)], 
-        model__eval_metric=u.get_lgbm_scoring(scoring), 
+        Xtrtr, ytrtr,
+        model__eval_set=[(Xtrans, ytrval)],
+        model__eval_metric=u.get_lgbm_scoring(scoring),
         model__callbacks=[early_stopping(50, first_metric_only=True), log_evaluation(-1)]
     )
-    
 
-#%%
+
+# %%
 def custom_metric(y_true, y_pred):
     metric_name = 'custom'
     value = 0.1
     is_higher_better = False
     return metric_name, value, is_higher_better
-  
+
+
 def lgbm(scoring):
     def lgbm_scoring(y_true, y_pred):
         y_pred = np.round(y_pred)
         return scoring.__name__, scoring(y_true, y_pred), True
+
     return lgbm_scoring
+
 
 y = pd.Series(e.LabelEncoder().fit_transform(
     y[X.index]), name="target")
 
-X_train, X_eval, y_train, y_eval = train_test_split(X.select_dtypes(exclude=("category", "object")), y, test_size=0.1, random_state=1)
+X_train, X_eval, y_train, y_eval = train_test_split(X.select_dtypes(exclude=("category", "object")), y, test_size=0.1,
+                                                    random_state=1)
 
 clf = LGBMClassifier(objective="binary", n_estimators=10000, random_state=1, metric="None", verbose=-1)
 eval_set = [(X_eval, y_eval)]
@@ -317,22 +925,21 @@ clf.fit(
 )
 print(u.accuracy_score(y_eval, clf.predict(X_eval)))
 
-
-#%% test retrieval
+# %% test retrieval
 
 good = {
     'credit-g': 31,
-    'nursery': 959,     
-    'adult': 1590, 
+    'nursery': 959,
+    'adult': 1590,
     'mv': 881,
     'kdd_internet_usage': 981,
     'KDDCup09_appetency': 1111,
     'KDDCup09_churn': 1112,
-    'KDDCup09_upselling': 1114, 
-    'airlines': 1169, 
-    'Agrawal1': 1235, 
-    'bank_marketing': 1461, 
-    'nomao': 1486, 
+    'KDDCup09_upselling': 1114,
+    'airlines': 1169,
+    'Agrawal1': 1235,
+    'bank_marketing': 1461,
+    'nomao': 1486,
     'altri': 'non ancora inseriti'
 }
 
@@ -343,9 +950,9 @@ X, y, categorical_indicator, attribute_names = dataset.get_data(
 
 X = X.dropna(axis=0, how="any")
 y = pd.Series(e.LabelEncoder().fit_transform(y[X.index]), name="target")
- 
+
 # -- define pipeline
-#!!! depends on openml syntax
+# !!! depends on openml syntax
 cats = X.dtypes[X.dtypes == 'category'].index.to_list()
 nums = X.dtypes[X.dtypes != 'category'].index.to_list()
 
@@ -360,7 +967,7 @@ scaler = e.CollapseEncoder()
 models = [
     # CatBoostClassifier(verbose=0),
     LGBMClassifier(),
-    RandomForestClassifier(), 
+    RandomForestClassifier(),
     DecisionTreeClassifier()
 ]
 
@@ -401,22 +1008,22 @@ for model in models:
             ],
             remainder="passthrough"
         )
-    
+
     pipe = Pipeline([
         ("preproc", CT),
         ("model", model)
     ])
-    
+
     t = time.time()
     pipe.fit(X_train, y_train)
     t = time.time() - t
-    
+
     perf[model.__class__.__name__] = t
     score[model.__class__.__name__] = scoring(y_test, pipe.predict(X_test))
-    
+
 print(json.dumps(perf, indent=4))
 print(json.dumps(score, indent=4))
-#%% OpenML find interesting datasets
+# %% OpenML find interesting datasets
 
 # The same can be done with lesser lines of code
 datasets = openml.datasets.list_datasets(output_format="dataframe")
@@ -429,7 +1036,7 @@ datasets = datasets[['BNG' not in x for x in datasets.name]]
 
 print(len(datasets.name.unique()))
 
-#%% Single Experimenal design
+# %% Single Experimenal design
 # datasets = openml.datasets.list_datasets(output_format="dataframe")
 # adult = datasets[datasets.name == "adult"].index[0].__int__()
 dataset = get_dataset(31)
@@ -474,10 +1081,7 @@ pipe = Pipeline([
 
 pipe.fit(X, y)
 
-
-
-
-#%%
+# %%
 
 CVTE = enc.CVRegularized(enc.TargetEncoder(default=np.nan), n_splits=2)
 TE = enc.TargetEncoder()
@@ -486,7 +1090,6 @@ GLMM = enc.GLMMEncoder(handle_unknown="return_nan")
 
 dataset = "adult"
 df = pd.read_csv(f"C:/Data/{dataset}.csv").iloc[:4].reset_index(drop=True)
-
 
 score = u.roc_auc_score
 
@@ -502,10 +1105,8 @@ X4 = GLMM.fit_transform(X, y)
 for Z in [X1, X2, X3, X4]:
     print(Z)
 
-
-#%%
+# %%
 encoder = enc.WOEEncoder
-
 
 # % Test new encoders
 dataset = "adult"
@@ -543,11 +1144,11 @@ kfold = StratifiedKFold()
 # LOOTE works as expected
 new_x = X[[col]].copy()
 new_x.loc[:, 'target'] = y
-a = (new_x.groupby(col)['target'].transform(np.sum) - y)\
+a = (new_x.groupby(col)['target'].transform(np.sum) - y) \
     / (new_x.groupby(col)['target'].transform(len) - 1)
-b = (new_x.groupby(col)['target'].apply(np.sum) - y)\
+b = (new_x.groupby(col)['target'].apply(np.sum) - y) \
     / (new_x.groupby(col)['target'].apply(len) - 1)
-c = (new_x.groupby(col)['target'].agg(['sum', 'count']))\
+c = (new_x.groupby(col)['target'].agg(['sum', 'count'])) \
     / (new_x.groupby(col)['target'].apply(len) - 1)
 # X.loc[:, 'TE'] = a
 # _d = X.groupby(col)['TE'].mean()
@@ -591,7 +1192,7 @@ scores = [out[0]["best_score"] for out in outs]
 depths = [out[0]["best_params"]["model__max_depth"] for out in outs]
 plt.plot(np.linspace(0, 10, 20), scores)
 plt.plot(np.linspace(0, 10, 20), depths)
-# CM = enc.CatMEW([enc.SmoothedTE], RobustScaler, classes_as_arguments=True)
+# CM = e.CatMEW([e.SmoothedTE], RobustScaler, classes_as_arguments=True)
 # DT = DecisionTreeClassifier()
 
 # ss = u.get_pipe_search_space(DecisionTreeClassifier)
@@ -611,8 +1212,8 @@ plt.plot(np.linspace(0, 10, 20), depths)
 # Xe = CM.fit_transform(X, y)
 
 # %%
-a = [1, 2] + 10*[x for x in range(100)]
-b = ['a', 'b', 'c'] + ['c']*100
+a = [1, 2] + 10 * [x for x in range(100)]
+b = ['a', 'b', 'c'] + ['c'] * 100
 f = itertools.product(a, b)
 f = zip(a, b)
 
@@ -651,7 +1252,6 @@ for (i1, c1), (i2, c2) in tqdm(itertools.product(enumerate(catcols), repeat=2)):
         corrs[i1, i2] = corrs[i2, i1]
         corrsdict[c1, c2] = corrsdict[c2, c1]
 
-
 # %%
 
 
@@ -663,7 +1263,6 @@ train = []
 test = []
 used_columns = []
 for col in catcols:
-
     encoder = enc.CatMEW([CountEncoder])
 
     used_columns.append(col)
@@ -764,7 +1363,6 @@ encs = []
 yps = []
 Xs = []
 for cm in CMs:
-
     Xtr_enc = cm.fit_transform(X_train, y_train)
     Xte_enc = cm.transform(X_test)
 
@@ -789,7 +1387,7 @@ dt = DecisionTreeClassifier()
 repeat = 10
 base = 1000
 sizes = [base * x for x in range(1, 101, 20) if 2 * base * x < len(df)]
-print(f"Total iterations: {len(sizes)**2}")
+print(f"Total iterations: {len(sizes) ** 2}")
 
 brs, bds = {}, {}
 for train_size, test_size in tqdm(itertools.product(sizes, repeat=2)):
@@ -882,6 +1480,7 @@ f_imp = dict(zip(feature_names, feature_importances))
 
 print(f_imp)
 
+
 # %% Ease of sampling with KLdiv
 
 
@@ -939,7 +1538,6 @@ aus = [c["au_logdivs"] for c in cds.values()]
 plt.scatter(es, aus)
 plt.xlabel("Entropy")
 plt.ylabel("Integral of log KL divergence in sample size")
-
 
 # %%
 # Evolution of target values in dataset size
@@ -1123,7 +1721,6 @@ fig, ax = plt.subplots(figsize=(10, 10), dpi=500)
 
 plot_tree(dt, ax=ax, max_depth=3, feature_names=X.columns)
 
-
 # %%
 
 # How does TargetEncoder trained on the training set differ from TargetEncoder trained on the whole dataset?
@@ -1170,11 +1767,9 @@ dt.fit(XE, y)
 y_pred = dt.predict(TE.transform(X_test))
 sc = balanced_accuracy_score(y_test, y_pred)
 
-
 # get disagreements
 XEE = X.join(XE.join(XE_train, rsuffix="_train"), lsuffix="_")
 xee = XEE.loc[np.abs(XEE.TE_cat_14 - XEE.TE_cat_14_train) > 0]
-
 
 # %% Analyze why CountEncoder is the best one
 df = pd.read_csv("C:/Data/kaggle_cat_dat_2.csv").sample(
@@ -1228,13 +1823,11 @@ x = Parallel(n_jobs=-1, verbose=100)(
     for score in (accuracy_score, balanced_accuracy_score, roc_auc_score)
 )
 
-
 # %%
 encoder = enc.TargetEncoder
 model = RandomForestClassifier
 
 pipe = Pipeline([("encoder", encoder()), ("model", model())])
-
 
 search_space = {
     "model": Categorical([model()]),
@@ -1256,11 +1849,9 @@ BS = BayesSearchCV(
 )
 opt = BS.fit(X, y)
 
-
 # %%
 pp = Pipeline([("encoder", encoder()), ("model", model())])
 pp.set_params(**opt.best_params_)
-
 
 # ss = {
 #       'model': Categorical([RandomForestRegressor()]),

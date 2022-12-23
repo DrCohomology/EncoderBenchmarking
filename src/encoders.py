@@ -6,9 +6,13 @@ Created on Mon Feb 21 16:59:19 2022
 """
 
 import functools
+import glob
 import math
 import numpy as np
+import os
 import pandas as pd
+import random
+import string
 
 from category_encoders import (
     BackwardDifferenceEncoder,
@@ -22,23 +26,36 @@ from category_encoders import (
     LeaveOneOutEncoder,
     MEstimateEncoder,
     OneHotEncoder,
+    OrdinalEncoder,
     PolynomialEncoder,
     SumEncoder,
     WOEEncoder,
 )
-
 from collections import defaultdict, Counter
 from collections.abc import Iterable
+from dirty_cat import (
+    MinHashEncoder,
+    SimilarityEncoder
+)
 from inspect import signature
 from scipy.stats import ttest_ind
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
+from sklearn.preprocessing import LabelEncoder
+
+import rpy2.robjects as ro
+from rpy2.robjects.packages import importr
+from rpy2.robjects import pandas2ri
+from rpy2.robjects.conversion import localconverter
 
 import src.utils as u
 
+# ----------------------------------------------------------------------------------------------------------------------
+# General Purpose
+# ----------------------------------------------------------------------------------------------------------------------
 
-class DFImputer(object):
+
+class DFImputer(BaseEstimator, TransformerMixin):
     
     def __init__(self, imputer):
         self.imputer = imputer
@@ -50,11 +67,57 @@ class DFImputer(object):
     def transform(self, X, **kwargs):
         return pd.DataFrame(self.imputer.transform(X), index=X.index, columns=X.columns)
     
-    def fit_transform(self, X, y, **kwargs):
+    def fit_transform(self, X, y=None, **kwargs):
         return self.fit(X, y, **kwargs).transform(X)
 
     def __str__(self):
         return self.imputer.__class__.__name__
+
+
+class PreBinner(BaseEstimator, TransformerMixin):
+    """
+    For every attribute, bins the levels so that the ratio of occurrences is above a certain threshold for every bin.
+    When transforming leaves unseen values unchanged bz default.
+    """
+
+    def __init__(self, thr=0, **kwargs):
+        self.thr = thr
+        self.binnings = defaultdict(lambda: {})
+        self.cols = None
+
+    def _bin(self, X:pd.DataFrame):
+        """
+        Bins every attribute and stores the binnings in self.binnings
+        """
+        for col in self.cols:
+            tmp = X[col].value_counts(ascending=True) / len(X)
+            for box in u.find_bins(tmp.index.to_numpy(), tmp.to_numpy(), self.thr):
+                for lvl in box:
+                    self.binnings[col][lvl] = '; '.join(box)
+
+    def fit(self, X: pd.DataFrame, y=None, **kwargs):
+        self.cols = X.columns
+        self._bin(X)
+        return self
+
+    def _update_binnings(self, X):
+        for col in self.cols:
+            self.binnings[col].update({x: x for x in set(X[col].unique())-set(self.binnings[col].keys())})
+
+    def transform(self, X: pd.DataFrame, y=None, **kwargs):
+        # Update self.binnings with the unseen levels of X[col], left as-is to self.base_encoder to deal with
+        X = X.copy()
+        self._update_binnings(X)
+        for col in self.cols:
+            X[col] = X[col].map(self.binnings[col])
+        return X
+
+    def fit_transform(self, X: pd.DataFrame, y=None, **kwargs):
+        return self.fit(X, y, **kwargs).transform(X, y, **kwargs)
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Encoders
+# ----------------------------------------------------------------------------------------------------------------------
 
 
 class Encoder(BaseEstimator, TransformerMixin):
@@ -65,15 +128,28 @@ class Encoder(BaseEstimator, TransformerMixin):
             lambda: defaultdict(lambda: self.default))
         self.cols = None
 
-    def fit(self, X: pd.DataFrame, y=None, **kwargs):
+    def fit(self, X: pd.DataFrame, y, **kwargs):
         return self
 
     def transform(self, X: pd.DataFrame, y=None, **kwargs):
         X = X.copy()
         return X
 
-    def fit_transform(self, X: pd.DataFrame, y, **kwargs):
+    def fit_transform(self, X: pd.DataFrame, y=None, **kwargs):
         return self.fit(X, y, **kwargs).transform(X, y, **kwargs)
+
+
+class DropEncoder(Encoder):
+    """
+    Evey categorical value is mapped to 1
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def transform(self, X: pd.DataFrame, y=None, **kwargs):
+        self.cols = X.columns
+        return pd.DataFrame(np.ones(len(X)), index=X.index, columns=['cat'])
 
 
 class TargetEncoder(Encoder):
@@ -101,7 +177,123 @@ class TargetEncoder(Encoder):
         return X.applymap(np.float)
 
 
-class Discretized():
+class SmoothedTE(Encoder):
+    """
+    TargetEncoder with smoothing parameter.
+    From https://github.com/rapidsai/deeplearning/blob/main/RecSys2020Tutorial/03_3_TargetEncoding.ipynb
+    use micci_barreca
+    """
+
+    def __init__(self, default=-1, w=10, **kwargs):
+        super().__init__(default=default, **kwargs)
+        self.w = w
+
+    def fit(self, X: pd.DataFrame, y, **kwargs):
+        self.cols = X.columns
+        X = X.join(y.squeeze())
+        global_mean = y.mean()
+        for col in self.cols:
+            temp = X.groupby(col).agg(['sum', 'count'])
+            temp['STE'] = (temp.target['sum'] + self.w *
+                           global_mean) / (temp.target['count'] + self.w)
+            # temp['TE'] = temp.target['sum'] / temp.target['count']
+            self.encoding[col].update(temp['STE'].to_dict())
+        return self
+
+    def transform(self, X: pd.DataFrame, y=None, **kwargs):
+        X = X.copy()
+        for col in self.cols:
+            X[col] = X[col].apply(lambda cat: self.encoding[col][cat])
+        return X
+
+    def __str__(self):
+        return f"Smoothed{self.w}TargetEncoder"
+
+class RGLMMEncoder(Encoder):
+    """
+    As GLMMEncoder is super slow, this wraps an R GLMMEncoder
+    """
+
+    def __init__(self, default=-1, **kwargs):
+        super().__init__(default=default, **kwargs)
+        self.rlibs = kwargs["rlibs"] if "rlibs" in kwargs else None
+
+    def _is_constant(self, X, col):
+        """
+        If the attribute has only one level, return a constant value
+        """
+        return len(X[col].unique()) == 1
+
+    def _import_rlibs(self):
+        if self.rlibs is None:
+            importr("lme4")
+            importr("base")
+            importr("utils")
+        elif "lme4" not in self.rlibs:
+            importr("lme4")
+        elif "base" not in self.rlibs:
+            importr("base")
+        elif "utils" not in self.rlibs:
+            importr("utils")
+        pass
+
+    def fit(self, X: pd.DataFrame, y, **kwargs):
+        # self._import_rlibs()
+        self.cols = X.columns
+        with localconverter(ro.default_converter + pandas2ri.converter):
+            env = ro.globalenv
+
+            rX = ro.conversion.py2rpy(X)
+            ry = ro.conversion.py2rpy(y)
+
+            for col in self.cols:
+                if self._is_constant(X, col):
+                    self.encoding[col] = defaultdict(lambda: 0)
+                    continue
+
+                env["rdf_"] = ro.DataFrame({
+                    "x": rX[rX.colnames.index(col)],
+                    "y": ry
+                })
+
+                ro.r("""
+                    fitted_model <- do.call(
+                        lme4::lmer,
+                        args = list(
+                            formula = y ~ 1 + (1 | x),
+                            data = rdf_,
+                            control = lme4::lmerControl(
+                                check.conv.singular = lme4::.makeCC(
+                                    action="ignore", 
+                                    tol=formals(isSingular)$tol
+                                )
+                            )
+                        )
+                    )
+                    coefs <- data.frame(coef(fitted_model)$x)
+                """)
+                tmp = ro.conversion.rpy2py(ro.globalenv["coefs"])
+                self.encoding[col].update(tmp[tmp.columns[0]].to_dict())
+        return self
+
+    def transform(self, X: pd.DataFrame, y=None, **kwargs):
+        X = X.copy()
+        for col in self.cols:
+            X[col] = X[col].apply(lambda cat: self.encoding[col][cat])
+        return X
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Wrappers
+# ----------------------------------------------------------------------------------------------------------------------
+
+
+class Regularization(BaseEstimator, TransformerMixin):
+
+    def __init__(self):
+        super().__init__()
+
+
+class Discretized(Regularization):
     """
     Discretizes the encoded values 
     The __str__ method ignores any parameter of the base_encoder
@@ -109,12 +301,13 @@ class Discretized():
     """
     
     def __init__(self, base_encoder, how="minmaxbins", n_bins=10, **kwargs):
+        super().__init__()
         self.base_encoder = base_encoder
         self.how = how
         self.n_bins = n_bins # only used if how != adaptive
         
         self.accepted_how = [
-            "bins", 
+            "boxes",
             "minmaxbins", 
             # "adaptive"
         ]
@@ -129,23 +322,25 @@ class Discretized():
         
         for col in self.cols:
             xs = XE[col].unique()
-            
-            if self.how == "bins":
+
+            if self.how == "boxes":
                 dxs = np.floor(self.n_bins * xs) / self.n_bins
             elif self.how == "minmaxbins":
                 m, M = xs.min(), xs.max()
                 if m == M:
-                    xs = np.ones_like(xs)
+                    dxs = np.ones_like(xs)
                 else:
-                    dxs = (xs-m)/(M-m) 
+                    # [m, M] -> [0, 1]
+                    dxs = (xs-m)/(M-m)
+                    # partition [0, 1] in bins
                     dxs = np.floor(self.n_bins * dxs) / self.n_bins
+                    # [0, 1] -> [m, M]
                     dxs = (M-m)*dxs + m
             else:
                 raise NotImplementedError(f"Strategy {self.how} not yet implemented")
-                
-                
+
             self.discretization[col] = dict(zip(xs, dxs))
-          
+            self.discretization[col][self.base_encoder.default] = self.base_encoder.default
         return self
           
     def transform(self, X: pd.DataFrame, y=None, **kwargs):
@@ -159,179 +354,56 @@ class Discretized():
 
     def __str__(self):
         return f"Discretized{self.base_encoder.__class__.__name__}{self.how.capitalize()}{self.n_bins}"
-        
-            
 
 
-class DiscretizedTargetEncoder(Encoder):
+class PreBinned(Regularization):
     """
-    Maps categorical values into the average target associated to them, 
-    merging values with close avg target together. 
-    "close" = 
-    With another column to ensure invertibility of encoding.
+    For every attribute, bins the levels so that the ratio of occurrences is above a certain hreshold for every bin.
+    Regularization for TE
     """
 
-    def __init__(self, default=-1, how="bins", ttest_th=0.9, n_bins=10, **kwargs):
-        super().__init__(default=default, **kwargs)
-        self.accepted_how = [
-            "bins", 
-            "minmaxbins", 
-            "adaptive"
-        ]
-        if how not in self.accepted_how:
-            raise ValueError(f"{how} is not a valid value for parameter how")
-        self.how = how
-        # only used if how=adaptive
-        self.ttest_th = ttest_th
-        self.n_bins = n_bins
+    def __init__(self, base_encoder, thr=0, **kwargs):
+        super().__init__()
+        self.thr = thr
+        self.base_encoder = base_encoder
+        self.base_binner = PreBinner(thr=self.thr, **kwargs)
 
     def fit(self, X: pd.DataFrame, y, **kwargs):
-        self.cols = X.columns
-        # self.feature_names = self.cols.to_list()
-        target_name = y.name
-        X = X.join(y.squeeze())
-        for col in self.cols:
-            # -- Base: TargetEncoding
-            temp = X.groupby(col)[target_name].mean().to_dict()
-
-            # -- Discretize to bins of 0.1, from 0.0 to 1.0 both included
-            if self.how == "bins":
-                temp = {
-                    val: np.floor(tgt*self.n_bins)/self.n_bins for val, tgt in temp.items()
-                }
-                
-            # -- First rescale to minmax, then discretize
-            elif self.how == "minmaxbins":
-                m, M = min(temp.values()), max(temp.values())
-                m -= 0.01
-                M += 0.01
-                if m < M:
-                    # rescale to 0,1
-                    temp = {
-                        val: (tgt-m)/(M-m) for val, tgt in temp.items()
-                    }
-                    # discretize
-                    temp = {
-                        val: np.floor(tgt*self.n_bins)/self.n_bins for val, tgt in temp.items()
-                    }
-                    # upscale again
-                    temp = {
-                        val: (M-m)*tgt + m for val, tgt in temp.items()
-                    }
-                else:
-                    pass
-                
-            #!!! -- test for consecutive averages to be stat. equal
-            elif self.how == "adaptive":
-                # group together close instances, do not touch the rest
-                # 1. test if two consecutive values have stat. different target (t-test 90%)
-                # requires: average target, stddev and sample size
-                # the test has H0: equal avg, so we want to NOT reject H0
-                # this means requiring a pvalue > 90% (sketchy but it'll do)
-                # 2. group the 'equal' values
-                
-                # order by target
-                avg = Counter(temp).most_common() # [(k1, v1), ...]
-                # list of observations
-                x = X.groupby(col)[target_name].agg(list).to_dict()     
-                
-                # - Iterate over avg and see if two samples are stat diff
-                sim = []
-                for i in range(1, len(avg)):
-                    # retrieve corresponding samples
-                    x1 = x[avg[i-1][0]]
-                    x2 = x[avg[i][0]]
-                    if ttest_ind(x1, x2, equal_var=False, nan_policy='omit').pvalue > self.ttest_th:
-                        sim.append({avg[i-1][0], avg[i][0]})
-                    
-                # - Iteratively merge sets of similar values with non empty 
-                # intersection
-                # EQUIVALENT: check if the last element of simI-1 == first element of simI
-                # due to the way sim is built from ordered lists
-                if len(sim) > 1:
-                    i = 1
-                    while True:
-                        if sim[i-1].intersection(sim[i]) != set():
-                            sim[i-1] = sim[i-1].union(sim[i])
-                            del sim[i]
-                        else:
-                            i += 1
-                        if i == len(sim):
-                            break
-                    
-                # - Encode each of those with the average target of the group
-                tempsim = {
-                    tuple(grp) : np.mean([temp[val] 
-                                          for val in grp]) 
-                    for grp in sim    
-                }
-
-                # assign each val to its group
-                v2g = {}
-                for val in temp.keys():
-                    for grp in tempsim.keys():
-                        if val in grp:
-                            v2g[val] = grp
-                            break
-
-                # assign each val to the group avg
-                temp.update({
-                    val : tempsim[grp] for val, grp in v2g.items()
-                })
-                
-            else:
-                # Check on value of how is enforced before
-                pass
-
-            # -- Save
-            self.encoding[col].update(temp)
-
+        self.base_encoder.fit(self.base_binner.fit_transform(X, y, **kwargs), y, **kwargs)
         return self
 
     def transform(self, X: pd.DataFrame, y=None, **kwargs):
-        X = X.copy()
-        for col in self.cols:
-            X[col] = X[col].apply(lambda cat: self.encoding[col][cat])
-        return X
+        return self.base_encoder.transform(self.base_binner.transform(X, y, **kwargs), y, **kwargs)
+
+    def fit_transform(self, X: pd.DataFrame, y=None, **kwargs):
+        return self.fit(X, y, **kwargs).transform(X, y, **kwargs)
 
     def __str__(self):
-        return f"DiscretizedTargetEncoder{self.how.capitalize()}{self.n_bins}"
+        return f"PreBinned{self.base_encoder.__class__.__name__}{self.thr}"
 
 
-class CollapseEncoder(Encoder):
-    """
-    Evey categorical value is mapped to 1
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    def transform(self, X: pd.DataFrame, y=None, **kwargs):
-        self.cols = X.columns
-        return pd.DataFrame(np.ones(len(X)), index=X.index, columns=['cat'])
-
-
-class CVRegularized(Encoder):
+class CVRegularized(Regularization):
     """
     Encodes every test fold with an Encoder trained on the training fold.
     Default value of base_encoder is supposed to be np.nan to allow the usage of
-    default encoder trained on the whole dataset. 
-    
+    default encoder trained on the whole dataset.
+
     The __str__ method ignores any parameter of the base_encoder
     """
-    
-    def __init__(self, base_encoder, n_splits=5, random_state=1444, default=-1, **kwargs):
+
+    def __init__(self, base_encoder: Encoder, n_splits=5, random_state=1444, default=-1, **kwargs):
+        super().__init__()
         self.base_encoder = base_encoder
         self.n_splits = n_splits
         self.random_state = random_state
         self.cv = StratifiedKFold(
-            n_splits=self.n_splits, 
+            n_splits=self.n_splits,
             random_state=self.random_state,
             shuffle=True
         )
         self.fold_encoders = [clone(self.base_encoder) for _ in range(n_splits)]
         self.default = default
-        
+
     def fit(self, X: pd.DataFrame, y, **kwargs):
         self.cols = X.columns
 
@@ -345,14 +417,14 @@ class CVRegularized(Encoder):
         self.base_encoder.fit(X, y)
 
         return self
-        
+
     def fit_transform(self, X: pd.DataFrame, y=None, **kwargs):
         """
         Training step: each fold is encoded differently
         """
         X = X.copy().astype('object')
         self.fit(X, y, **kwargs)
-        
+
         # default values
         Xdefault = self.base_encoder.transform(X)
 
@@ -362,48 +434,48 @@ class CVRegularized(Encoder):
         # default values handling
         default = X.isna()
         X[default] = Xdefault[default]
-        
+
         # still missing values?
         X.fillna(self.default, inplace=True)
-        
+
         return X
 
     def transform(self, X: pd.DataFrame, y=None, **kwargs):
         """
         Test step: the whole dataset is encoded with the base_encoder
         """
-        
+
         X = X.copy().astype('object')
         X = self.base_encoder.transform(X, y)
-        
+
         # missing values?
         X.fillna(self.default, inplace=True)
-        
+
         return X
-        
 
     def __str__(self):
         return f'CV{self.n_splits}{self.base_encoder.__class__.__name__}'
-    
-    
-class CVBlowUp(Encoder):
+
+
+class CVBlowUp(Regularization):
     """
     Has a column for every fold
-    
+
     The __str__ method ignores any parameter of the base encoder
     """
 
     def __init__(self, base_encoder, n_splits=5, random_state=1444, **kwargs):
+        super().__init__()
         self.base_encoder = base_encoder
         self.n_splits = n_splits
         self.random_state = random_state
         self.cv = StratifiedKFold(
-            n_splits=self.n_splits, 
+            n_splits=self.n_splits,
             random_state=self.random_state,
             shuffle=True
         )
         self.fold_encoders = [clone(self.base_encoder) for _ in range(n_splits)]
-        
+
     def fit(self, X: pd.DataFrame, y, **kwargs):
         self.cols = X.columns
 
@@ -416,7 +488,7 @@ class CVBlowUp(Encoder):
         self.base_encoder.fit(X, y)
 
         return self
-        
+
     def transform(self, X: pd.DataFrame, y=None, **kwargs):
         X = X.copy()
 
@@ -431,6 +503,10 @@ class CVBlowUp(Encoder):
     def __str__(self):
         return f'BlowUpCV{self.n_splits}{self.base_encoder.__class__.__name__}'
 
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Unused encoders
+# ----------------------------------------------------------------------------------------------------------------------
 
 class DistanceEncoder(Encoder):
     """
@@ -499,29 +575,87 @@ class LocalOptimizerEncoder(Encoder):
         return X
 
 
-class SmoothedTE(Encoder):
+class JGLMMEncoder(Encoder):
     """
-    TargetEncoder with smoothing parameter. 
-    From https://github.com/rapidsai/deeplearning/blob/main/RecSys2020Tutorial/03_3_TargetEncoding.ipynb
+    Use julia to speed up GLMMEncoder
 
     """
-
-    def __init__(self, default=-1, w=10, **kwargs):
+    def __init__(self, default=-1, **kwargs):
         super().__init__(default=default, **kwargs)
-        self.w = w
+        self.basedir = os.path.dirname(__file__)
+        self.tmpdir = None
+        self.tmpdat = None
+        self.encoding = None
+
+        raise Exception("This encoder is broken and should not be used")
+
+
+    class JuliaError(Exception):
+        def __init__(self, t):
+            super().__init__(t)
+
+    def _add_path_to_julia(self):
+        # TODO: add automatic check for julia path (call julia and see if it works)
+        path_to_julia = "C:\\Users\\federicom\\AppData\\Local\\Programs\\Julia-1.8.2\\bin"
+        if path_to_julia not in os.getenv("PATH").split(';'):
+            os.environ["PATH"] += f";{path_to_julia}"
+
+    def _make_tmpdir(self):
+        # self.tmpdir = ''.join([random.choice(string.ascii_letters) for _ in range(5)])
+
+        self.tmpdir = 'testitesttestest'
+        try:
+            os.mkdir(os.path.join(self.basedir, self.tmpdir))
+        except:
+            pass
+        self.tmpdat = os.path.join(self.basedir, self.tmpdir, "dataset.csv")
+
+    def _dump_dataset(self, X, y):
+        tmp = X.copy()
+        tmp["y"] = y
+        tmp.to_csv(self.tmpdat, index=False)
+
+    def _call_julia(self):
+        # TODO: assumes that juia file is in the same directory as encoders.py
+        # os.system(f"julia {self.basedir}\\fit_glmm.jl {self.basedir} {self.tmpdir}")
+        # os.system(f"{self.basedir}\\FitGLMMcompiled\\bin\\FitGLMM.exe {self.basedir} {self.tmpdir}")
+        # print(os.path.join(self.basedir, self.tmpdir, "FitGLMMnoargscompiled", "bin", "FitGLMMnoargs.exe"))
+        # os.system(os.path.join(self.basedir, self.tmpdir, "FitGLMMnoargscompiled", "bin", "FitGLMMnoargs.exe"))
+        #
+        # import glob
+        # for xx in glob.glob(os.path.join(self.basedir, self.tmpdir, "FitGLMMnoargscompiled", "bin", "*.exe")):
+        #     print(xx)
+
+        import rpy2.robjects as robjects
+        robjects.r.source(os.path.join(self.basedir, self.tmpdir, "fit_glmm.R"), encoding="utf-8")
+
+
+    def _gather_results(self, check_cols):
+        self.encoding = {}
+        for complete_fname in glob.glob(os.path.join(self.basedir, self.tmpdir, "*.csv")):
+            fname = os.path.split(os.path.splitext(complete_fname)[0])[-1]
+            if fname == "dataset":
+                continue
+            elif fname not in check_cols:
+                raise self.JuliaError(f"{fname} is not a column of the original DataFrame.")
+
+            check_cols.pop(check_cols.index(fname))
+            self.encoding[fname] = pd.read_csv(complete_fname, index_col=0).to_dict()
+
+        # check that all columns are OK
+        if len(check_cols) > 0:
+            raise self.JuliaError(f"{check_cols} are still left.")
+
+    def _delete_tmpdir(self):
+        pass
 
     def fit(self, X: pd.DataFrame, y, **kwargs):
-        self.cols = X.columns
-        target_name = y.name
-        X = X.join(y.squeeze())
-        global_mean = y.mean()
-        for col in self.cols:
-            temp = X.groupby(col).agg(['sum', 'count'])
-            temp['STE'] = (temp.target['sum'] + self.w *
-                           global_mean) / (temp.target['count'] + self.w)
-            # temp['TE'] = temp.target['sum'] / temp.target['count']
-            self.encoding[col].update(temp['STE'].to_dict())
-        return self
+        self._make_tmpdir()
+        self._dump_dataset(X, y)
+        self._add_path_to_julia()
+        self._call_julia()
+        self._gather_results(check_cols=X.columns.to_list())
+        self._delete_tmpdir()
 
     def transform(self, X: pd.DataFrame, y=None, **kwargs):
         X = X.copy()
@@ -574,6 +708,7 @@ class OOFTEWrapper(Encoder):
 
     def __str__(self):
         return f"{self.encoder_class.__name__}()"
+
 
 class OOFTE(BaseEstimator, TransformerMixin):
     def __init__(self, col, default=-1, random_state=1444):

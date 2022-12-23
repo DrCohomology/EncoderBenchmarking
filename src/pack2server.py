@@ -11,49 +11,42 @@ import os
 import shutil
 import re
 
+
 def pack2server():
-    lbl = input("Label of experiment > ")
-    github_path = r"C:\Users\federicom\Documents\Github"
-    base_dir = "EncoderBenchmarking"
-    SEP_dir = f"EB{date.today().month:02}{date.today().day:02}_{lbl}"
+    main_version = input("Main version (6 -> pipe tuning, 8 -> no tuning, 9 -> model tuning):")
+    lbl = input("Label of experiment:")
 
-    os.chdir(github_path)
+    base_dir = r"C:\Users\federicom\Documents\Github\EncoderBenchmarking\src"
+    dst_dir = r"C:\Users\federicom\Documents\Github\Experiment_to_server"
+    experiment_dir = f"main{main_version}_{date.today().month:02}{date.today().day:02}_{lbl}"
 
-    for dst in [
-        SEP_dir,
-        os.path.join(SEP_dir, "src"),
-        os.path.join(SEP_dir, "results"),
-        os.path.join(os.path.join(SEP_dir, "results"), "logs")
-    ]:
-
+    for dst in [experiment_dir, os.path.join(experiment_dir, "src"), os.path.join(experiment_dir, "results")]:
         try:
-            os.mkdir(dst)
+            os.mkdir(os.path.join(dst_dir, dst))
         except FileExistsError:
-            print(f"{dst} already exists!")
-    tocopy = ["main6.py", "encoders.py", "utils.py"]
-    os.chdir(os.path.join(base_dir, "src"))
-    for fname in glob.glob("*.py"):
-        if fname in tocopy:
-            with open(fname, "r") as fr:
-                x = fr.read()
-                y = re.sub(r"from src\.", "from ", x)
-                w = re.sub(r"import src\.", "import ", y)
-                z = re.sub(
-                    r'DATASET_FOLDER = "C:/Data"', 'DATASET_FOLDER = "./../data"', w
-                )
-                z2 = re.sub(
-                    r"os.chdir(\'C:/Users/federicom/Documents/Github/EncoderBenchmarking\')", '', z  
-                )
-                z3 = re.sub(
-                    r'RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results"', 'RESULT_FOLDER = "./results"', z2
-                )
-            filedst = os.path.join(os.path.join(github_path, SEP_dir, "src"), fname)
-            with open(filedst, "w+") as fw:
-                fw.write(z3)
+            print(f"{dst} already exists in {dst_dir}!")
+            break
+
+    os.chdir(base_dir)
+
+    tocopy = [f"main{main_version}.py", "encoders.py", "utils.py"]
+    for base_file in glob.glob(os.path.join("*.py")):
+        if base_file not in tocopy:
+            continue
+        subs = [
+            (r"from src\.", "from "),
+            (r"import src\.", "import "),
+            (r'RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results"', 'RESULT_FOLDER = "./results"')
+        ]
+        with open(base_file, "r") as fr:
+            text = fr.read()
+        for local_text, server_text in subs:
+            text = re.sub(local_text, server_text, text)
+
+        dst_file = os.path.join(dst_dir, experiment_dir, "src", f"{base_file}")
+        with open(dst_file, "w+") as fw:
+            fw.write(text)
 
 
 if __name__ == "__main__":
     pack2server()
-    print(
-        "Before running the experiment, double check: utils.tune_pipe, utils.DATASET_FOLDER and main1.encoders_list"
-    )

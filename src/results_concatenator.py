@@ -28,17 +28,31 @@ def clean_concatenated_dataset(df, remove_outdated_experiments=True):
         remove = [enc for enc in df.encoder.unique() if ('6' in enc or ("RGLMM" not in enc and "GLMM" in enc))]
         df = df.loc[~ df.encoder.isin(remove)]
 
+    # remove duplicates
+    df = df.drop_duplicates()
+
+    # group duplicates
+    df = df.groupby("dataset encoder model scoring fold".split()).mean().reset_index()
+
     # add the fold column and check that it is ok -> every group in groups has the same fold numbers
     if "fold" not in df.columns:
         df["fold"] = list(range(5)) * int(len(df)/5)
     groups = ["dataset", "encoder", "model", "scoring"]
     test = df.groupby(by=groups).fold.sum()
     if (test != 10).any():
-        raise Exception("The concatenated dataset has invalid fold column.")
+        raise Exception(f"The concatenated dataset has invalid fold column. {(test != 10).sum()}")
 
     return df
 
 def concatenate_results(experiment_name, force=False, clean=True, remove_outdated_experiments=True, ignore_concatenated=False):
+    """
+    Concatenates ALL of the .csv files in the directory into  _concatenated file.
+    Use as utility function to merge the datasets from a single experimental run (a set of experiments run together)
+    Further concatenation of results between experimental runs is in src.result_concatenator and src.result_analysis
+    clean: has effect only if force=True
+    ignore_concatenated: has effect only if _concatenated.csv is in experiment_dir and force=True
+    """
+
     warnings.filterwarnings("ignore")
 
     results_folder = os.path.join(u.RESULT_FOLDER, experiment_name)
@@ -57,6 +71,8 @@ def concatenate_results(experiment_name, force=False, clean=True, remove_outdate
         temp = pd.read_csv(filename)
         if len(temp) == 0:
             raise ValueError(f"{filename} is empty.")
+        if "fold" not in temp.columns:
+            temp["fold"] = list(range(5)) * int(len(temp) / 5)
         temps.append(temp)
 
     df = pd.concat(temps, ignore_index=True).drop_duplicates()
@@ -69,7 +85,7 @@ def concatenate_results(experiment_name, force=False, clean=True, remove_outdate
     return df
 
 if __name__ == "__main__":
-    experiment_name = "29dats"
-    df = concatenate_results(experiment_name, force=True, clean=True, remove_outdated_experiments=False)
+    experiment_name = "main8_0131_LR_final"
+    df = concatenate_results(experiment_name, force=True, clean=True, remove_outdated_experiments=False, ignore_concatenated=False)
 
 

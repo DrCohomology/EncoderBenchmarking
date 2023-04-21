@@ -59,12 +59,13 @@ reload(e)
 # suppress any warning (from python AND R)
 rpy2_logger.setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
+os.environ.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', NUMEXPR_NUM_THREADS='1', MKL_NUM_THREADS='1')
 
 np.random.seed(0)
 
 def main_loop(experiment_dir,
               dataset, encoder, scaler, cat_imputer, num_imputer, models=tuple(), scorings=tuple(), index=0, num_exp=0,
-              n_splits=5, random_state=1, timeout=6000):
+              n_splits=5, random_state=1, timeout=3600*12):
     """
     output into logfile:
         0 : no computation
@@ -121,7 +122,7 @@ def main_loop(experiment_dir,
     cv = StratifiedKFold(n_splits=n_splits, random_state=None)
     try:
         with Timeout(timeout, swallow_exc=False) as timeout_ctx:
-            for tr, te in cv.split(X, y):
+            for fold, (tr, te) in enumerate(cv.split(X, y)):
                 Xtr, Xte, ytr, yte = X.iloc[tr], X.iloc[te], y.iloc[tr], y.iloc[te]
                 Xtr, ytr = Xtr.reset_index(drop=True), ytr.reset_index(drop=True)
                 Xte, yte = Xte.reset_index(drop=True), yte.reset_index(drop=True)
@@ -131,19 +132,21 @@ def main_loop(experiment_dir,
                 end = time.time()
 
                 for model in models:
-                    model.fit(XEtr, ytr)
-                    for scoring in scorings:
-                        out = {
-                            # "index": i,
-                            "dataset": dataset.name,
-                            "encoder": str(encoder),
-                            "scaler": scaler.__class__.__name__,
-                            "model": model.__class__.__name__,
-                            "scoring": scoring.__name__,
-                            "cv_score": scoring(yte, model.predict(prepipe.transform(Xte))),
-                            "tuning_time": end - start
-                        }
-                        saveset = pd.concat([saveset, pd.DataFrame(out, index=[0])], ignore_index=True)
+                    with warnings.catch_warnings(record=False):
+                        warnings.filterwarnings("ignore")
+                        model.fit(XEtr, ytr)
+                        for scoring in scorings:
+                            out = {
+                                "dataset": dataset.name,
+                                "fold": fold,
+                                "encoder": str(encoder),
+                                "scaler": scaler.__class__.__name__,
+                                "model": model.__class__.__name__,
+                                "scoring": scoring.__name__,
+                                "cv_score": scoring(yte, model.predict(prepipe.transform(Xte))),
+                                "tuning_time": end - start
+                            }
+                            saveset = pd.concat([saveset, pd.DataFrame(out, index=[0])], ignore_index=True)
         saveset = saveset.sort_values(["encoder", "scaler", "model", "scoring"])
     except Exception as tuning_error:
         exec_log["exit_status"] = 2
@@ -171,23 +174,24 @@ def main_loop(experiment_dir,
 rlibs = None
 random_state = 1
 
+dnames = list(u.DATASETS.keys())
 dids = list(u.DATASETS.values())
 
-std = [e.BinaryEncoder(), e.CatBoostEncoder(), e.CountEncoder(), e.DropEncoder(), e.RGLMMEncoder(rlibs=rlibs),
-       e.OneHotEncoder(), e.TargetEncoder(), e.MinHashEncoder(), e.OrdinalEncoder()]
+std = [e.BinaryEncoder(), e.CatBoostEncoder(), e.CountEncoder(), e.DropEncoder(), e.MinHashEncoder(), e.OneHotEncoder(),
+       e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.SumEncoder(), e.TargetEncoder(), e.WOEEncoder()]
 cvglmm = [e.CVRegularized(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
 cvte = [e.CVRegularized(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 buglmm = [e.CVBlowUp(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
 bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
 binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
-ste = [e.SmoothedTE(w=w) for w in [1e-1, 1, 10]]
-encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte])
+me = [e.MEstimate(m=m) for m in [1e-1, 1, 10]]
+encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte, me])
 models = [
     u.DecisionTreeClassifier(random_state=random_state+2, max_depth=5),
     u.SVC(random_state=random_state+4, C=1.0, kernel="rbf", gamma="scale"),
     u.KNeighborsClassifier(n_neighbors=5),
-    # u.LogisticRegression(max_iter=100, random_state=random_state+6, solver="lbfgs")
+    u.LogisticRegression(max_iter=100, random_state=random_state+6, solver="lbfgs")
 ]
 scorings = [u.accuracy_score, u.roc_auc_score, u.f1_score]
 scalers = [u.RobustScaler()]
@@ -210,7 +214,7 @@ gbl_log = {
     "scorings": [s.__name__ for s in scorings],
 }
 
-test = True
+test = False
 update_experiment = True
 
 if __name__ == "__main__":
@@ -242,27 +246,33 @@ if __name__ == "__main__":
         models = [u.LogisticRegression()]
         scorings = [u.roc_auc_score, u.accuracy_score]
 
+    # -- Experiment
+    nj = 1 if test else -1
+
+    experiments = list(itertools.product(dnames, encoders, scalers, cat_imputers, num_imputers))
+    experiments = u.remove_concluded_main8(experiments, result_folder, model=None)
+    experiments = u.remove_failed_main8(experiments, result_folder)
+    experiments = u.smart_sort(experiments, random=True)
+
     # -- Load datasets
     print("Preloading datasets")
-    datasets = []
-    for did in tqdm(dids):
+    datasets = {}
+    for dname, did in tqdm(zip(dnames, dids)):
         try:
             dataset = get_dataset(did)
         except:
             gbl_log["datasets"].remove(did)
             gbl_log["failed_datasets"].append(did)
         else:
-            datasets.append(dataset)
+            datasets[dname] = dataset
 
-    # -- Experiment
-    nj = 1 if test else -1
+    experiments = [
+        (datasets[dname], encoder, scaler, cat_imputer, num_imputer)
+        for (dname, encoder, scaler, cat_imputer, num_imputer) in experiments
+    ]
 
-    experiments = itertools.product(datasets, encoders, scalers, cat_imputers, num_imputers)
-    experiments = u.remove_concluded_runs(experiments, result_folder) if not test else experiments
-    experiments = u.smart_sort(experiments, random=True)
-
-    restart_count = 0
-    while len(experiments) > 0 and restart_count < 10:
+    restart_count = 1
+    while len(experiments) > 0 and restart_count < 1:
         try:
             print(f"Running restart number {restart_count}.")
             Parallel(n_jobs=nj, verbose=0)(
@@ -277,7 +287,5 @@ if __name__ == "__main__":
             experiments = u.remove_concluded_runs(experiments, result_folder)
         else:
             break
-
-
 
     print("Done!")

@@ -59,6 +59,7 @@ reload(e)
 # suppress any warning (from python AND R)
 rpy2_logger.setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
+os.environ.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', NUMEXPR_NUM_THREADS='1', MKL_NUM_THREADS='1')
 
 np.random.seed(0)
 
@@ -72,9 +73,7 @@ def main_loop(result_folder,
         2 : error raised
     """
 
-    # -- LGBM and SmoothedTE require tuning and cannot be handled by this function
-    if isinstance(encoder, e.SmoothedTE):
-        raise ValueError(f"{str(encoder)} is an invalid encoder as it requires tuning.")
+    # -- LGBM requires tuning and cannot be handled by this function
     for model in models:
         if isinstance(model, u.LGBMClassifier):
             raise ValueError(f"{str(model)} is an invalid model as it requires tuning.")
@@ -183,20 +182,20 @@ rlibs = None
 random_state = 1
 
 dids = list(u.DATASETS.values())
+dnames = list(u.DATASETS.keys())
 
 std = [e.BinaryEncoder(), e.CatBoostEncoder(), e.CountEncoder(), e.DropEncoder(), e.MinHashEncoder(), e.OneHotEncoder(),
-       e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.TargetEncoder(), e.WOEEncoder()]
+       e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.SumEncoder(), e.TargetEncoder(), e.WOEEncoder()]
 cvglmm = [e.CVRegularized(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
 cvte = [e.CVRegularized(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 buglmm = [e.CVBlowUp(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
 bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
 binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
-ste = [e.SmoothedTE(w=w) for w in [1e-1, 1, 10]]
-encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte])
+me = [e.MEstimate(m=m) for m in [1e-1, 1, 10]]
+encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte, me])
 models = [
     u.DecisionTreeClassifier(random_state=random_state+2),
-    u.SVC(random_state=random_state+4),
     u.KNeighborsClassifier(),
     u.LogisticRegression(max_iter=100, random_state=random_state+6, solver="lbfgs")
 ]
@@ -221,8 +220,8 @@ gbl_log = {
     "scorings": [s.__name__ for s in scorings],
 }
 
-test = True
-update_experiment = False
+test = False
+update_experiment = True
 if __name__ == "__main__":
     experiment_name = "test" if not test else "___TEST___"
 
@@ -252,27 +251,33 @@ if __name__ == "__main__":
         models = [u.DecisionTreeClassifier(), u.KNeighborsClassifier()]
         scorings = [u.roc_auc_score, u.accuracy_score]
 
+    # -- Experiment
+    nj = 1 if test else -1
+
+    experiments = list(itertools.product(dnames, encoders, scalers, cat_imputers, num_imputers))
+    experiments = u.remove_concluded_main9(experiments, result_folder, model=None)
+    experiments = u.remove_failed_main9(experiments, result_folder)
+    experiments = u.smart_sort(experiments, random=True)
+
     # -- Load datasets
     print("Preloading datasets")
-    datasets = []
-    for did in tqdm(dids):
+    datasets = {}
+    for dname, did in tqdm(zip(dnames, dids)):
         try:
             dataset = get_dataset(did)
         except:
             gbl_log["datasets"].remove(did)
             gbl_log["failed_datasets"].append(did)
         else:
-            datasets.append(dataset)
+            datasets[dname] = dataset
 
-    # -- Experiment
-    nj = 1 if test else -1
-
-    experiments = itertools.product(datasets, encoders, scalers, cat_imputers, num_imputers)
-    experiments = u.remove_concluded_runs(experiments, result_folder)
-    experiments = u.smart_sort(experiments, random=True)
+    experiments = [
+        (datasets[dname], encoder, scaler, cat_imputer, num_imputer)
+        for (dname, encoder, scaler, cat_imputer, num_imputer) in experiments
+    ]
 
     restart_count = 0
-    while len(experiments) > 0 and restart_count < 10:
+    while len(experiments) > 0 and restart_count < 1:
         try:
             print(f"Running restart number {restart_count}.")
             Parallel(n_jobs=nj, verbose=0)(
@@ -287,7 +292,5 @@ if __name__ == "__main__":
             experiments = u.remove_concluded_runs(experiments, result_folder)
         else:
             break
-
-
 
     print("Done!")

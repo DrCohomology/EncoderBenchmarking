@@ -61,7 +61,7 @@ np.random.seed(0)
 
 def main_loop(result_folder,
               dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring, index=0, num_exp=0,
-              n_splits=5, random_state=1444, timeout=6000):
+              n_splits=5, random_state=1444, timeout=3600*12):
     """
     output into logfile:
         0 : no computation
@@ -170,8 +170,6 @@ def main_loop(result_folder,
                     search_space = {
                         'model__n_estimators': None
                     }
-                    if isinstance(encoder, e.SmoothedTE):
-                        search_space["preproc__encoder__encoder__w"] = None
 
                     BS = pipe
                     tuning_result = {
@@ -179,7 +177,6 @@ def main_loop(result_folder,
                         "time": time.time() - start_time,
                         "best_params": {
                             "model__n_estimators": pipe["model"].best_iteration_,
-                            "preproc__encoder__encoder__w": e.SmoothedTE().w  # TODO: default - no tuning
                         }
                     }
                 # - tuning
@@ -228,18 +225,18 @@ def main_loop(result_folder,
 rlibs = None
 random_state = 1
 
-dids = list(u.DATASETS.values())
+dids = list(u.DATASETS_SMALL.values())
 
 std = [e.BinaryEncoder(), e.CatBoostEncoder(), e.CountEncoder(), e.DropEncoder(), e.MinHashEncoder(), e.OneHotEncoder(),
-       e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.TargetEncoder(), e.WOEEncoder()]
+       e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.SumEncoder(), e.TargetEncoder(), e.WOEEncoder()]
 cvglmm = [e.CVRegularized(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
 cvte = [e.CVRegularized(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 buglmm = [e.CVBlowUp(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
 bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
 binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
-ste = [e.SmoothedTE(w=w) for w in [1e-1, 1, 10]]
-encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte])
+me = [e.MEstimate(m=m) for m in [1e-1, 1, 10]]
+encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte, me])
 models = [
     u.DecisionTreeClassifier(random_state=random_state+2),
     u.SVC(random_state=random_state+4),
@@ -312,22 +309,27 @@ if __name__ == "__main__":
             datasets.append(dataset)
 
     # -- Experiment
-    rng = default_rng() # permute to avoid heavy encoders being used all together
     nj = 1 if test else -1
 
     experiments = itertools.product(datasets, encoders, scalers, cat_imputers, num_imputers, models, scorings)
-    experiments = u.remove_concluded_runs(experiments, result_folder)
+    experiments = u.remove_concluded_runs(experiments, result_folder, repeat_unsuccessful=True) if not test else experiments
     experiments = u.smart_sort(experiments, random=True)
 
-    Parallel(n_jobs=nj, verbose=0)(
-        delayed(main_loop)(result_folder, dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring,
-                           index=index, num_exp=len(experiments), **kwargs)
-        for (index, (dataset,
-                     encoder,
-                     scaler,
-                     cat_imputer,
-                     num_imputer,
-                     model,
-                     scoring))
-        in enumerate(experiments)
-    )
+    restart_count = 0
+    while len(experiments) > 0 and restart_count < 10:
+        try:
+            print(f"Running restart number {restart_count}.")
+            Parallel(n_jobs=nj, verbose=0)(
+                delayed(main_loop)(result_folder, dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring,
+                                   index=index, num_exp=len(experiments), **kwargs)
+                for (index, (dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring)) in
+                enumerate(experiments)
+            )
+        except Exception as error:
+            print(error)
+            restart_count += 1
+            experiments = u.remove_concluded_runs(experiments, result_folder)
+        else:
+            break
+
+

@@ -22,11 +22,13 @@ from itertools import product
 from scipy.stats import kendalltau, t, iqr
 from tqdm import tqdm
 
+import src.rank_utils as ru
 import src.utils as u
 import src.results_concatenator as rc
 
 reload(u)
 reload(rc)
+reload(ru)
 
 # TODO: plot with same font as document
 """
@@ -37,556 +39,71 @@ mpl.rcParams['text.latex.preamble'] = r'\\usepackage{nicefrac}'
 mpl.rc('font', family='serif')
 """
 
+SAVESTATE_FOLDER = os.path.join(u.RESULT_FOLDER, "Savestates", "ranking_save_states")
 
-# ---- Import and clean experimental results
+def load_results(experiment_name, remove_incomplete_encoders, remove_incomplete_datasets, printme=True):
+
+    # ---- Import and clean experimental results
+    df = rc.concatenate_results(experiment_name, clean=False)
+
+    ne = one = len(df.encoder.unique())
+    nd = ond = len(df.dataset.unique())
+    nm = len(df.model.unique())
+    ns = len(df.scoring.unique())
+    nsc = len(df.scaler.unique())
+    nf = len(df.fold.unique())
+
+    expected_iters_dataset = ne * nm * ns * nsc * nf
+    expected_iters_encoder = nd * nm * ns * nsc * nf
+    if printme:
+        for encoder in df.encoder.unique():
+            print(f"{encoder:15s}", df.loc[df.encoder == encoder].shape[0] // nf, expected_iters_encoder // nf)
+
+        for dataset in df.dataset.unique():
+            print(f"{dataset:50s}", df.loc[df.dataset == dataset].shape[0] // nf, expected_iters_dataset // nf)
+
+    wasted = 0
+    if remove_incomplete_datasets:
+        print("Removing incomplete datasets")
+        wasted = 0
+        for d in df.dataset.unique():
+            sd = pd.Series(df.dataset == d).sum()
+            if sd < expected_iters_dataset:
+                df = df.loc[df.dataset != d]
+                wasted += sd
+
+        ne = len(df.encoder.unique())
+        nd = len(df.dataset.unique())
+        nm = len(df.model.unique())
+        ns = len(df.scoring.unique())
+        nsc = len(df.scaler.unique())
+        nf = len(df.fold.unique())
+        expected_iters_encoder = nd * nm * ns * nsc * nf
+
+    if remove_incomplete_encoders:
+        print("Removing incomplete encoders")
+        for E in df.encoder.unique():
+            if pd.Series(df.encoder == E).sum() < expected_iters_encoder:
+                df = df.loc[df.encoder != E]
+
+    # completed datasets
+    new_datasets = set(df.dataset.unique()).intersection(u.LEFT_DATASETS)
+
+    if printme:
+        print(f"Surviving datasets: {len(df.dataset.unique())} of {ond}")
+        print(f"Surviving encoders: {len(df.encoder.unique())} of {one}")
+        print(f"A total of {wasted} entries are not considered.")
+        print(f"The new completed datasets are: {new_datasets}")
+
+    finished_datasets_id = pd.Series(df.dataset.unique()).map(lambda d: defaultdict(lambda: 0, u.DATASETS)[d])
+    finished_datasets = pd.DataFrame((df.dataset.unique(), finished_datasets_id)).T.sort_values(1)
+    if printme:
+        print("---- These are the completed datasets ----")
+        print(finished_datasets)
+
 experiment_name = "main6 results with tuning and 6-encoders"
-df = rc.concatenate_results(experiment_name, clean=False)
-
-# remove prebinned - giving problems
-df = df.loc[~ df.encoder.isin(("PBTE0", "DTEM6", ""))]
-
-ne = one = len(df.encoder.unique())
-nd = ond = len(df.dataset.unique())
-nm = len(df.model.unique())
-ns = len(df.scoring.unique())
-nsc = len(df.scaler.unique())
-nf = len(df.fold.unique())
-
-expected_iters_dataset = ne * nm * ns * nsc * nf
-expected_iters_encoder = nd * nm * ns * nsc * nf
-printme = True
-if printme:
-    for encoder in df.encoder.unique():
-        print(f"{encoder:15s}", df.loc[df.encoder == encoder].shape[0] // nf, expected_iters_encoder // nf)
-
-    for dataset in df.dataset.unique():
-        print(f"{dataset:50s}", df.loc[df.dataset == dataset].shape[0] // nf, expected_iters_dataset // nf)
-
-print("Removing incomplete datasets")
-wasted = 0
-for d in df.dataset.unique():
-    sd = sum(df.dataset == d)
-    if sd < expected_iters_dataset:
-        df = df.loc[df.dataset != d]
-        wasted += sd
-
-ne = len(df.encoder.unique())
-nd = len(df.dataset.unique())
-nm = len(df.model.unique())
-ns = len(df.scoring.unique())
-nsc = len(df.scaler.unique())
-nf = len(df.fold.unique())
-
-expected_iters_encoder = nd * nm * ns * nsc * nf
-
-print("Removing incomplete encoders")
-for E in df.encoder.unique():
-    if sum(df.encoder == E) < expected_iters_encoder:
-        df = df.loc[df.encoder != E]
-
-# completed datasets
-new_datasets = set(df.dataset.unique()).intersection(u.LEFT_DATASETS)
-
-print(f"Surviving datasets: {len(df.dataset.unique())} of {ond}")
-print(f"Surviving encoders: {len(df.encoder.unique())} of {one}")
-print(f"A total of {wasted} entries are not considered.")
-print(f"The new completed datasets are: {new_datasets}")
-
-finished_datasets_id = pd.Series(df.dataset.unique()).map(lambda d: defaultdict(lambda: 0, u.DATASETS)[d])
-finished_datasets = pd.DataFrame((df.dataset.unique(), finished_datasets_id)).T.sort_values(1)
-printme = False
-if printme:
-    print("---- These are the completed datasets ----")
-    print(finished_datasets)
-
 
 #%% Aggregator and first aggregation
-class Aggregator(object):
-
-    def __init__(self, df: pd.DataFrame, scoring: str = None, model: str = None):
-        """
-        'scoring' and 'model' are resp. the scoring and model we aggregate ranks on.
-        In other terms, is one of them is None, we will consider it as a separate
-
-        """
-
-        if "scoring" not in df.columns or "model" not in df.columns:
-            raise ValueError("The input DataFrame should have columns 'scoring' and 'model'.")
-        if scoring and scoring not in df.scoring.unique():
-            raise ValueError(f"{scoring} is not a valid scoring function. Valid scorings are {list(df.scoring.unique())}")
-        if model and model not in df.model.unique():
-            raise ValueError(f"{model} is not a valid model. Valid models are {list(df.model.unique())}")
-
-        self.scoring = scoring
-        self.model = model
-        self.original_df = df
-
-        if scoring and model:
-            self.df = self.original_df.loc[(self.original_df.scoring == self.scoring) & (self.original_df.model == self.model)][
-                ["dataset", "encoder", "cv_score"]]
-        elif scoring:
-            self.df = self.original_df.loc[(df.scoring == self.scoring)][["model", "dataset", "encoder", "cv_score"]]
-        elif model:
-            self.df = self.original_df.loc[(df.model == self.model)][["scoring", "dataset", "encoder", "cv_score"]]
-        else:
-            self.df = self.original_df
-
-
-        self.supported_strategies = [
-            "all",
-            "mean rank",
-            "median rank",
-            "numbest rank",
-            "numworst rank",
-            # "numKbest rank",
-            "hornik-meyer rank",
-            # "nemenyi rank", # theoretical issues
-            "mean performance",
-            "median performance",
-            "thrbest performance",
-            'rescaled mean performance'
-        ]
-
-        self.plain_domination_matrices = []
-        self.ttest_domination_matrices = []
-        self.ttest_pvals = []  # of the pairwise t-tests
-        self.bayesian_equality_matrices = []  # according to Bayesian statistic in Benavoli 2017
-        self.bayesian_domination_matrices = []
-
-        self.final_ranks = {}
-
-    def _get_e2i(self):
-        self.e2i = {E: i for (i, E) in enumerate(df.encoder.unique())}
-        self.i2e = {v: k for (k, v) in self.e2i.items()}
-    def _filter_kwargs(self, kwargs):
-        """
-        Filters the passed-in kwargs to ensue that each method of self gets only the correct ones.
-        KNOWN ISSUE: if two methods have a parameter with the same name, both get the same value of such parameter.
-        """
-        fkw = {}
-        for attr in (x for x in dir(self) if callable(getattr(self, x))):
-            fkw[attr] = {}
-            try:
-                for k, v in kwargs.items():
-                    if k in getattr(self, attr).__code__.co_varnames:
-                        fkw[attr][k] = v
-            except AttributeError:
-                del fkw[attr]
-        return fkw
-
-    def _get_plain_dommat(self):
-        n = len(self.e2i)
-        for dataset in self.df.dataset.unique():
-            df_ = self.df.loc[self.df.dataset == dataset]
-            R = - np.ones((n, n))
-            for E1, i1 in self.e2i.items():
-                for E2, i2 in self.e2i.items():
-                    if i1 > i2:
-                        continue
-                    cv1 = df_[df_.encoder == E1].cv_score.to_numpy()
-                    cv2 = df_[df_.encoder == E2].cv_score.to_numpy()
-
-                    if len(cv1) * len(cv2) == 0:
-                        raise ValueError("One of the two measurements is null for ", E1, E2)
-                    elif len(cv1) != len(cv2):
-                        raise ValueError("The two measurements have different size ", E1, E2)
-
-                    # E1, E2 same
-                    if cv1.mean() == cv2.mean():
-                        R[i1, i2] = R[i2, i1] = 1
-                    # E1 better than E2
-                    elif cv1.mean() > cv2.mean():
-                        R[i1, i2] = 1
-                        R[i2, i1] = 0
-                    # E2 better than E1
-                    else:
-                        R[i1, i2] = 0
-                        R[i2, i1] = 1
-
-            if (R == -1).sum() > 0:
-                raise Exception(
-                    f"Dataset {dataset}: when building the domination matrix some entries were left uninitialized ")
-
-            self.plain_domination_matrices.append(R)
-    def _get_ttest_dommat(self, alpha=0.1, corrected=True):
-        """
-        Run pairwise comparisons of cross-validated performances (hence the correction term).
-        A domination matrix is M[i1, i2] = 1 iff (i1 is better than i2) or (the comparison is undecided ie pval>alpha).
-        Update self.ttest_domination_matrices with a domination matrix for each dataset.
-        """
-        n = len(self.e2i)
-        for dataset in self.df.dataset.unique():
-            df_ = self.df.loc[self.df.dataset == dataset]
-            R = - np.ones((n, n))
-            pvals = -np.ones((n, n))
-            for E1, i1 in self.e2i.items():
-                for E2, i2 in self.e2i.items():
-                    if i1 > i2:
-                        continue
-                    cv1 = df_[df_.encoder == E1].cv_score.to_numpy()
-                    cv2 = df_[df_.encoder == E2].cv_score.to_numpy()
-
-                    if len(cv1) * len(cv2) == 0:
-                        raise ValueError("One of the two measurements is null for", E1, E2)
-                    elif len(cv1) != len(cv2):
-                        raise ValueError("The two measurements have different size", E1, E2)
-
-                    # frequentist analysis
-                    comp, p = u.compare_with_ttest(cv1, cv2, alpha=alpha, corrected=corrected)
-                    pvals[i1, i2] = p
-                    pvals[i2, i1] = p
-                    # print(dataset, E1, E2, comp, p)
-
-                    # E1 and E2 not comparable
-                    if comp == 0:
-                        R[i1, i2] = 1
-                        R[i2, i1] = 1
-                    # E1 > E2
-                    elif comp == 1:
-                        R[i1, i2] = 1
-                        R[i2, i1] = 0
-                    # E1 < E2
-                    elif comp == 2:
-                        R[i1, i2] = 0
-                        R[i2, i1] = 1
-                    else:
-                        raise ValueError(f"Something went very wrong when comparing with t-test: {E1}, {E2}, comp={comp}")
-
-            if (R == -1).sum() > 0:
-                raise Exception(f"Dataset {dataset}: when building the domination matrix some entries were left uninitialized ")
-
-            self.ttest_domination_matrices.append(R)
-            self.ttest_pvals.append(pvals)
-    def _get_bayesian_mat(self, rope=0.01):
-        n = len(self.e2i)
-        for dataset in self.df.dataset.unique():
-            df_ = self.df.loc[self.df.dataset == dataset]
-            Beq = - np.ones((n, n))  # Beq[i, j] = prob(true difference in average performance is less than rope)
-            Bdom = -np.ones((n, n))  # Beq[i, j] = prob(true difference in average performance is NOT ZERO): as the rope breaks things, we ignore it here
-            for E1, i1 in self.e2i.items():
-                for E2, i2 in self.e2i.items():
-                    if i1 > i2:
-                        continue
-
-                    cv1 = df_[df_.encoder == E1].cv_score.to_numpy()
-                    cv2 = df_[df_.encoder == E2].cv_score.to_numpy()
-
-                    if len(cv1) * len(cv2) == 0:
-                        raise ValueError("One of the two measurements is null for", E1, E2)
-                    elif len(cv1) != len(cv2):
-                        raise ValueError("The two measurements have different size", E1, E2)
-
-                    # ---- bayesian analysis, Benavoli 2017, corrected
-                    if i1 == i2:
-                        Beq[i1, i2] = 1
-                        Bdom[i1, i2] = 0
-                        continue
-
-                    k = len(cv1)  # ATTENTION! In utils.ttest, this parameter is called n
-                    average_difference = (cv1 - cv2).mean()
-                    corrected_variance = (1 / k + 1 / (k - 1)) * (
-                                cv1 - cv2).var()  # test/train is 1/(n-1) for n folds of cross validation
-                    if corrected_variance == 0:
-                        """
-                        If variance == 0, the t-student collapses into a Dirac-delta, and Beq[i1, i2] = prob(E1 == E2) 
-                        is 1 if the difference in averages is less than the rope, 0 otherwise
-                        """
-                        if np.abs(average_difference) <= rope:
-                            Beq[i1, i2] = Beq[i2, i1] = 1
-                            Bdom[i1, i2] = Bdom[i2, i1] = 0
-                        else:
-                            Beq[i1, i2] = Beq[i2, i1] = 0
-                            Bdom[i1, i2] = 1 if average_difference > 0 else 0
-                            Bdom[i2, i1] = 1 - Bdom[i1, i2]
-                        continue
-                    distribution_true_difference = t(df=k - 1, loc=average_difference, scale=corrected_variance)
-                    Beq[i1, i2] = Beq[i2, i1] = distribution_true_difference.cdf(
-                        rope) - distribution_true_difference.cdf(-rope)
-                    Bdom[i1, i2] = 1 - distribution_true_difference.cdf(rope)
-                    Bdom[i2, i1] = distribution_true_difference.cdf(-rope)
-            if (Beq == -1).sum() > 0:
-                raise Exception(
-                    f"Dataset {dataset}: when building the equality probability matrix some entries were left uninitialized ")
-            if (Bdom == -1).sum() > 0:
-                raise Exception(
-                    f"Dataset {dataset}: when building the Bayesian domination matrix some entries were left uninitialized ")
-
-            self.bayesian_equality_matrices.append(Beq)
-            self.bayesian_domination_matrices.append(Bdom)
-    def _get_domination_matrices(self, how="all", **kwargs):
-        """
-        Gets the domination matrices for each dataset listed in a dataframe
-        """
-
-        # dollar[algorithm, dataset] = position in weak ordering
-        try:
-            self.e2i
-        except AttributeError:
-            self._get_e2i()
-
-        fkw = self._filter_kwargs(kwargs)
-        if how in ("plain", "all"):
-            self._get_plain_dommat()
-        if how in ("ttest", "all"):
-            self._get_ttest_dommat(**fkw["_get_ttest_dommat"])
-        if how in ("bayes", "all"):
-            self._get_bayesian_mat(**fkw["_get_bayesian_mat"])
-
-    def _get_rank_from_matrix(self, M):
-        """
-        Based on the results (in the paper) that two indices have the same dominance if and only if htey belong to the
-        same tier.
-        """
-        scores = {
-            E: M[i].sum() for (E, i) in self.e2i.items()
-        }
-        return self._get_rank_from_scores(scores, ascending=False)
-
-    def _get_ranks(self, how="plain"):
-        if how == "plain":
-            self.ranks = [self._get_rank_from_matrix(R) for R in self.plain_domination_matrices]
-        elif how == "ttest":
-            self.ranks = [self._get_rank_from_matrix(R) for R in self.ttest_domination_matrices]
-        else:
-            raise ValueError("Invalid value of parameter 'how', ", how)
-    def _get_rank_from_scores(self, scores, ascending=True):
-        """
-        If ascending is True, you assume that the lowest score corresponds to the lowest rank of 0.
-        In other terms, the lower the score the better.
-        This in the light of statistics computed on ranks, which give this sort of behaviour
-        """
-
-        c = 1 if ascending else -1
-        order_map = {
-            s: sorted(set(scores.values()), key=lambda x: c*x).index(s) for s in set(scores.values())
-        }
-        return dict(sorted([(E, order_map[s]) for (E, s) in scores.items()], key=lambda s: s[1]))
-
-    def _mean_rank_aggregation(self):
-        scores = {
-            E: np.mean([r[E] for r in self.ranks]) for E in self.e2i.keys()
-        }
-        self.final_ranks["mean rank"] = self.meanRank_rank = self._get_rank_from_scores(scores)
-    def _median_rank_aggregation(self):
-        scores = {
-            E: np.median([r[E] for r in self.ranks]) for E in self.e2i.keys()
-        }
-        self.final_ranks["median rank"] = self.medianRank_rank = self._get_rank_from_scores(scores)
-    def _numbest_rank_aggregation(self):
-        scores = {
-            E: sum(r[E] == 0 for r in self.ranks) for E in self.e2i.keys()
-        }
-        self.final_ranks["numbest rank"] = self.numbestRank_rank = self._get_rank_from_scores(scores, ascending=False)
-    def _numworst_rank_aggregation(self):
-        scores = {
-            E: sum(r[E] == max(r.values()) for r in self.ranks) for E in self.e2i.keys()
-        }
-        self.final_ranks["numworst rank"] = self.numworstRank_rank = self._get_rank_from_scores(scores)
-    def _numkbest_rank_aggregation(self, k):
-        """Number of times an encoder is among the k-best CLASSES of encoders, i.e. not among the best k encoders"""
-        scores = {
-            E: sum(r[E] <= k-1 for r in self.ranks) for E in self.e2i.keys()
-        }
-        self.final_ranks[f"num{k}best rank"] = self._get_rank_from_scores(scores, ascending=False)
-        self.__setattr__(f"num{k}bestRank_rank", self.final_ranks[f"num{k}best rank"])
-    def _hornikmeyer_rank_aggregation(self, solver=cp.GLPK_MI, how="plain"):
-        """Based on optimization problem formulated in Hornik and Meyer (2007). Takes the domination matrices and
-        computes the centroid DM according to symmetric distance"""
-
-        if solver == cp.ECOS_BB:
-            warnings.warn("ECOS_BB is deprecated as solver")
-
-        if how == "plain":
-            Rs = np.array(self.plain_domination_matrices)
-        elif how == "ttest":
-            Rs = np.array(self.ttest_domination_matrices)
-        else:
-            raise ValueError("Invalid value of parameter 'how', ", how)
-
-        nR = len(self.e2i)
-        centroid = cp.Variable(shape=(nR, nR), boolean=True)
-
-        # formulate cost function and objective
-        C = np.sum(2 * Rs - 1, axis=0)
-        # as the sum has to be computed without the diagonal elements, we kill them in C (see Hornik and Meyer)
-        for i in range(len(C)):
-            C[i, i] = 0
-        objective = cp.Maximize(cp.sum(cp.multiply(C, centroid)))
-
-        # constraints
-        totality = [
-            centroid[i, j] + centroid[j, i] >= 1
-            for i, j in product(range(nR), repeat=2) if i != j
-        ]
-        transitivity = [
-            centroid[i, j] + centroid[j, k] - centroid[i, k] <= 1
-            for i, j, k in product(range(nR), repeat=3) if i != j and j != k and i != k
-        ]
-
-        # problem
-        prob = cp.Problem(objective, totality + transitivity)
-        prob.solve(solver=solver)
-
-        # get solution
-        R = centroid.value.round()
-        for i in range(len(R)):
-            R[i, i] = 1
-
-        self.final_ranks["hornik-meyer rank"] = self.hornikmeyer_rank = self._get_rank_from_matrix(R)
-    def _nemenyi_rank_aggregation(self, alpha=0.05, how="plain"):
-        """
-        First: compare average ranks and build a domination matrix.
-        Second: apply a mask for statistically significant difference using Nemenyi
-        KNOWN ISSUES: Nemenyi is likely OK when considering rankings with ties, BUT not OK when considering rankings with
-            different numbers of ranks involved.
-            For instance, we could have for a dataset the rank [(A, B), C] and for another the ranking [A, B, C]:
-            Nemenyi will just consider the average rank of A, B, C to determine their significance but not the total
-            range of the rankings
-        """
-        # The domination matrices can be build with a ttest or without
-        if how == "plain":
-            dommat = self.plain_domination_matrices
-        elif how == "ttest":
-            dommat = self.ttest_domination_matrices
-        else:
-            raise ValueError("Invalid value of parameter 'how', ", how)
-
-        # score of an encoder is the average rank
-        scores = {
-            E: np.mean([r[E] for r in self.ranks]) for E in self.e2i.keys()
-        }
-        domination_matrix = np.array([
-            [s1 <= s2 for s2 in scores.values()]
-            for s1 in scores.values()
-        ]).astype(int)
-
-        ranks_matrix = np.array([
-            list(l.values())
-            for l in [self._get_rank_from_matrix(R)
-                      for R in dommat]
-        ]).T
-        statdiff_matrix = (sp.posthoc_nemenyi(ranks_matrix) < alpha).to_numpy()
-        for i in range(len(statdiff_matrix)):
-            statdiff_matrix[i, i] = 1
-
-        self.testdom = domination_matrix
-
-        # apply the statistically significant mask: only significant comparisons survive
-        domination_matrix = domination_matrix * statdiff_matrix
-
-        self.testdom2 = domination_matrix
-        self.teststat = statdiff_matrix
-
-
-        self.final_ranks["nemenyi rank"] = self.nemenyiRank_rank = self._get_rank_from_matrix(domination_matrix)
-
-    def _mean_performance_aggregation(self):
-        scores = {
-            E: self.df.loc[self.df.encoder == E]["cv_score"].mean() for E in self.e2i.keys()
-        }
-        self.final_ranks["mean performance"] = self.meanPerformance_rank = self._get_rank_from_scores(scores, ascending=False)
-    def _median_performance_aggregation(self):
-        scores = {
-            E: self.df.loc[self.df.encoder == E]["cv_score"].median() for E in self.e2i.keys()
-        }
-        self.final_ranks["median performance"] = self.medianPerformance_rank = self._get_rank_from_scores(scores, ascending=False)
-    def _thresholdbest_performance_aggregation(self, th):
-        best_performances = {
-            dataset: self.df.loc[self.df.dataset == dataset]["cv_score"].max()
-            for dataset in self.df.dataset.unique()
-        }
-        self.df[f"th{th}"] = self.df.dataset.map({k: th * v for k, v in best_performances.items()})
-
-        scores = {
-            E: (self.df.loc[self.df.encoder == E]["cv_score"] >= self.df.loc[self.df.encoder == E][f"th{th}"]).sum()
-            for E in self.e2i.keys()
-        }
-        # missing support for changing name
-        self.final_ranks[f"{th}bestPerformance rank"] = self._get_rank_from_scores(scores, ascending=False)
-        self.__setattr__("thresholdbestPerformance_rank", self.final_ranks[f"{th}bestPerformance rank"])
-    def _rescaled_mean_performance_aggregation(self):
-        """
-        First, take average across fold.
-        Second, compute worst performance W.
-        Third, compute IQR of performances.
-        Fourth, final score[E] = (performance - W) / IQR
-        """
-
-        # find average performance for each encoder and dataset
-        apf = pd.DataFrame(self.df.groupby(["encoder", "dataset"])["cv_score"].mean())
-
-        # find worst performance per dataset
-        wpd = self.df.groupby(["dataset"])["cv_score"].min()
-
-        # find IQR of performances per dataset, if IQR == 0 -> constant -> IQR does not matter
-        iqrd = self.df.groupby(["dataset"])["cv_score"].agg(iqr)
-        iqrd[iqrd == 0] = 1
-
-        temp = apf.join(wpd, how="left", rsuffix="_worst").join(iqrd, how="left", rsuffix="_iqr")
-        temp["score"] = (temp["cv_score"] - temp["cv_score_worst"]) / (temp["cv_score_iqr"])
-        scores = {
-            E: temp.loc[E]["score"].mean() for E in self.e2i.keys()
-        }
-
-        self.final_ranks["rescaled mean performance"] = self.rescaledMeanPerformance_rank = \
-            self._get_rank_from_scores(scores, ascending=False)
-
-
-
-    def aggregate(self, strategy, skipped_strategies=tuple(), **kwargs):
-        """
-        If strategy=='all', all strategies expect those listed in skipped_strategies are considered
-        """
-        if strategy not in self.supported_strategies:
-            raise ValueError(f"\"{strategy}\" is not a supported strategy. "
-                             f"Supported strategies: {self.supported_strategies}")
-
-        fkw = self._filter_kwargs(kwargs)
-        self._get_e2i()
-
-        if "rank" in strategy:
-            try:
-                self.ranks
-            except AttributeError:
-                self._get_domination_matrices(**fkw["_get_domination_matrices"])
-                self._get_ranks(**fkw["_get_ranks"])
-
-        # start_time = time.time()
-
-        if strategy == "mean rank":
-            self._mean_rank_aggregation()
-        elif strategy == "median rank":
-            self._median_rank_aggregation()
-        elif strategy == "numbest rank":
-            self._numbest_rank_aggregation()
-        elif strategy == "numworst rank":
-            self._numworst_rank_aggregation()
-        # elif strategy == "numKbest rank":
-        #     self._numkbest_rank_aggregation(**fkw["_numkbest_rank_aggregation"])
-        elif strategy == "hornik-meyer rank":
-            self._hornikmeyer_rank_aggregation(**fkw["_hornikmeyer_rank_aggregation"])
-        # elif strategy == "nemenyi rank":
-        #     warnings.warn("Nemenyi rank is not correctly implemented.")
-            # self._nemenyi_rank_aggregation(**fkw["_nemenyi_rank_aggregation"])
-        elif strategy == "mean performance":
-            self._mean_performance_aggregation()
-        elif strategy == "median performance":
-            self._median_performance_aggregation()
-        elif strategy == "thrbest performance":
-            self._thresholdbest_performance_aggregation(**fkw["_thresholdbest_performance_aggregation"])
-        elif strategy == "rescaled mean performance":
-            self._rescaled_mean_performance_aggregation()
-        elif strategy == "all":
-            # recursive call for every strategy
-            for strat in set(self.supported_strategies) - set(skipped_strategies):
-                if strat == "all":
-                    continue
-                self.aggregate(strat, **kwargs)
-        else:
-            raise ValueError(f"For some reason this went unnoticed, but {strategy} is not supported. "
-                             f"Supported strategies are {self.supported_strategies}")
-
-        # print(strategy, time.time()-start_time)
 
 run = False
 if run:
@@ -612,11 +129,11 @@ if run:
 
 save = False
 if save:
-    df_ranks.to_csv(os.path.join(u.RESULT_FOLDER, "df_ranks.csv"))
+    df_ranks.to_csv(os.path.join(SAVESTATE_FOLDER, "df_ranks.csv"))
 
 load = False
 if load:
-    df_ranks = pd.read_csv(os.path.join(u.RESULT_FOLDER, "df_ranks.csv"),
+    df_ranks = pd.read_csv(os.path.join(SAVESTATE_FOLDER, "df_ranks.csv"),
                            header=[0, 1, 2],
                            index_col=0
                            )
@@ -744,7 +261,7 @@ for eps in [0.1, 0.15, 0.2, 0.3, 1]:
     ax.set_xlabel(order)
     ax.set_ylabel(order)
     plt.tight_layout()
-    plt.savefig(os.path.join(u.RESULT_FOLDER, f"heatmap_eps={eps}.png"))
+    plt.savefig(os.path.join(SAVESTATE_FOLDER, f"heatmap_eps={eps}.png"))
 
 
 #%% Compute WCC and OCC for every model
@@ -821,16 +338,6 @@ for k in set(d1.keys()).union(d2.keys()):
 
 
 #%% Agreement on best class - weighted symmetric difference is 1-intersection_over_union
-
-def agreement(col1: pd.Series, col2: pd.Series, best: bool = True):
-    """
-    Agreement is measured with intersection over union
-    """
-    o1 = col1.min() if best else col1.max()
-    o2 = col2.min() if best else col2.max()
-    b1 = set(col1[col1 == o1].index)
-    b2 = set(col2[col2 == o2].index)
-    return len(b1.intersection(b2)) / len(b1.union(b2))
 
 best = True
 
@@ -934,7 +441,7 @@ if run:
 
 save = False
 if save:
-    folder = os.path.join(u.RESULT_FOLDER, "Stability on dataset sample size for non-overlapping datasets iteration 3")
+    folder = os.path.join(SAVESTATE_FOLDER, "Stability on dataset sample size for non-overlapping datasets iteration 3")
     for sample_size, l in ranks2.items():
         for rep, (r0, r1) in enumerate(l):
             r0.to_csv(os.path.join(folder, f"ranks_ss{sample_size}_rep{rep}_dat0.csv"))
@@ -946,7 +453,7 @@ if save:
 import re
 load = False
 if load:
-    folder = os.path.join(u.RESULT_FOLDER, "Stability on dataset sample size for non-overlapping datasets iteration 1")
+    folder = os.path.join(SAVESTATE_FOLDER, "Stability on dataset sample size for non-overlapping datasets iteration 1")
     repetitions = 10
     ranks2 = defaultdict(lambda: [[] for _ in list(range(repetitions))])
     for filename in glob.glob(os.path.join(folder, "*.csv")):
@@ -1071,7 +578,7 @@ ensemble_score = pd.DataFrame(ensemble_score)
 
 import json
 
-with open(os.path.join(u.RESULT_FOLDER, "recommendations.json"), 'w') as fw:
+with open(os.path.join(SAVESTATE_FOLDER, "recommendations.json"), 'w') as fw:
     json.dump(recommendations, fw)
 
 
@@ -1402,16 +909,16 @@ if run:
                 dict_ranks[model, scoring, strategy] = dict(sorted(final_rank.items(), key=lambda x: x[0]))
 
         df_ranks = pd.DataFrame(dict_ranks)
-        df_ranks.to_csv(os.path.join(u.RESULT_FOLDER, f"df29_ranks_{tuning}.csv"))
+        df_ranks.to_csv(os.path.join(SAVESTATE_FOLDER, f"df29_ranks_{tuning}.csv"))
     print("Done!")
 
 load = False
 if load:
-    dfn_ranks = pd.read_csv(os.path.join(u.RESULT_FOLDER, "df29_ranks_no_tuning.csv"),
+    dfn_ranks = pd.read_csv(os.path.join(SAVESTATE_FOLDER, "df29_ranks_no_tuning.csv"),
                             header=[0, 1, 2],
                             index_col=0
                             )
-    dft_ranks = pd.read_csv(os.path.join(u.RESULT_FOLDER, "df29_ranks_tuning.csv"),
+    dft_ranks = pd.read_csv(os.path.join(SAVESTATE_FOLDER, "df29_ranks_tuning.csv"),
                             header=[0, 1, 2],
                             index_col=0
                             )
@@ -1457,6 +964,7 @@ if plot:
 """
 Fix a dataset, compare rankings for model and scoring
 """
+
 run = False
 if run:
     ccn = {}
@@ -1473,8 +981,8 @@ if run:
     df_ranks_datn = pd.DataFrame(ccn)
     df_ranks_datt = pd.DataFrame(cct)
 
-    df_ranks_datn.to_csv(os.path.join(u.RESULT_FOLDER, f"df29_ranks_perdataset_tuning.csv"))
-    df_ranks_datt.to_csv(os.path.join(u.RESULT_FOLDER, f"df29_ranks_perdataset_no_tuning.csv"))
+    df_ranks_datn.to_csv(os.path.join(SAVESTATE_FOLDER, f"df29_ranks_perdataset_tuning.csv"))
+    df_ranks_datt.to_csv(os.path.join(SAVESTATE_FOLDER, f"df29_ranks_perdataset_no_tuning.csv"))
 
 columns = df_ranks_datn.columns
 corrs = pd.Series(index=df_ranks_datn.columns)

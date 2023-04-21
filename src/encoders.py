@@ -177,16 +177,16 @@ class TargetEncoder(Encoder):
         return X.applymap(np.float)
 
 
-class SmoothedTE(Encoder):
+class MEstimate(Encoder):
     """
     TargetEncoder with smoothing parameter.
     From https://github.com/rapidsai/deeplearning/blob/main/RecSys2020Tutorial/03_3_TargetEncoding.ipynb
     use micci_barreca
     """
 
-    def __init__(self, default=-1, w=10, **kwargs):
+    def __init__(self, default=-1, m=10, **kwargs):
         super().__init__(default=default, **kwargs)
-        self.w = w
+        self.m = m
 
     def fit(self, X: pd.DataFrame, y, **kwargs):
         self.cols = X.columns
@@ -194,9 +194,7 @@ class SmoothedTE(Encoder):
         global_mean = y.mean()
         for col in self.cols:
             temp = X.groupby(col).agg(['sum', 'count'])
-            temp['STE'] = (temp.target['sum'] + self.w *
-                           global_mean) / (temp.target['count'] + self.w)
-            # temp['TE'] = temp.target['sum'] / temp.target['count']
+            temp['STE'] = (temp.target['sum'] + self.m * global_mean) / (temp.target['count'] + self.m)
             self.encoding[col].update(temp['STE'].to_dict())
         return self
 
@@ -207,7 +205,8 @@ class SmoothedTE(Encoder):
         return X
 
     def __str__(self):
-        return f"Smoothed{self.w}TargetEncoder"
+        return f"MEstimate{self.m}Encoder"
+
 
 class RGLMMEncoder(Encoder):
     """

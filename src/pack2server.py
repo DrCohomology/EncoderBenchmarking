@@ -16,17 +16,24 @@ def pack2server():
     main_version = input("Main version (6 -> pipe tuning, 8 -> no tuning, 9 -> model tuning):")
     lbl = input("Label of experiment:")
 
+    # ---  Directories
     base_dir = r"C:\Users\federicom\Documents\Github\EncoderBenchmarking\src"
     dst_dir = r"C:\Users\federicom\Documents\Github\Experiment_to_server"
     experiment_dir = f"main{main_version}_{date.today().month:02}{date.today().day:02}_{lbl}"
 
-    for dst in [experiment_dir, os.path.join(experiment_dir, "src"), os.path.join(experiment_dir, "results")]:
+    for dst in [experiment_dir,
+                os.path.join(experiment_dir, "src"),
+                os.path.join(experiment_dir, "results"),
+                os.path.join(experiment_dir, "results", experiment_dir),
+                os.path.join(experiment_dir, "results", experiment_dir, "logs"),
+                ]:
         try:
             os.mkdir(os.path.join(dst_dir, dst))
         except FileExistsError:
             print(f"{dst} already exists in {dst_dir}!")
             break
 
+    # ---  Change files
     os.chdir(base_dir)
 
     tocopy = [f"main{main_version}.py", "encoders.py", "utils.py"]
@@ -36,7 +43,9 @@ def pack2server():
         subs = [
             (r"from src\.", "from "),
             (r"import src\.", "import "),
-            (r'RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results"', 'RESULT_FOLDER = "./results"')
+            (r'RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results/ExperimentalResults"', 'RESULT_FOLDER = "./results"'),
+            (r'experiment_name = "test" if not test else "___TEST___"', f'experiment_name = "{experiment_dir}"'),
+            (r"test = True", "test = False"),
         ]
         with open(base_file, "r") as fr:
             text = fr.read()

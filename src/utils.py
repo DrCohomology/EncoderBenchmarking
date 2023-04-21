@@ -16,7 +16,6 @@ from functools import reduce
 from itertools import product
 from numpy.random import default_rng
 from openml.datasets import get_dataset
-from scipy.stats import t
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     make_scorer,
@@ -51,14 +50,14 @@ from sklearn.tree import DecisionTreeClassifier
 
 # ----
 
-RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results"
+RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results/ExperimentalResults"
 
 DATASETS = {
     'kr-vs-kp': 3,
     'credit-approval': 29,
     'credit-g': 31,
     'sick': 38,
-    'tictactoe': 50,
+    'tic-tac-toe': 50,
     'heart-h': 51,
     'vote': 56,
     'monks-problems-1': 333,
@@ -66,7 +65,7 @@ DATASETS = {
     'irish': 451,
     'profb': 470,
     'mv': 881,
-    'molecular_biology_promoters': 956,
+    'molecular-biology_promoters': 956,
     'nursery': 959,
     'kdd_internet_usage': 981,
     'ada_prior': 1037,
@@ -75,7 +74,7 @@ DATASETS = {
     'KDDCup09_upselling': 1114,
     'airlines': 1169,
     'Agrawal1': 1235,
-    'bank_marketing': 1461,
+    'bank-marketing': 1461,
     'blogger': 1463,
     'nomao': 1486,
     'thoracic-surgery': 1506,
@@ -84,14 +83,14 @@ DATASETS = {
     'cylinder-bands': 6332,
     'dresses-sales': 23381,
     'SpeedDating': 40536,
-    'titanic': 40945,
+    'Titanic': 40945,
     'Australian': 40981,
     'jungle_chess_2pcs_endgame_elephant_elephant': 40999,
     'jungle_chess_2pcs_endgame_rat_rat': 41005,
     'jungle_chess_2pcs_endgame_lion_lion': 41007,
     'kick': 41162,
-    'porto_seguro': 41224,
-    'churn': 42178,
+    'porto-seguro': 41224,
+    'telco-customer-churn': 42178,
     'KDD98': 42343,
     'sf-police-incidents': 42344,
     'open_payments': 42738,
@@ -106,24 +105,25 @@ DATASETS = {
     'mushroom': 43922
 }
 
-DATASETS_29_TUNING_ININFLUENT = {
+DATASETS_SMALL = {
     'kr-vs-kp': 3,
     'credit-approval': 29,
     'credit-g': 31,
     'sick': 38,
-    'tictactoe': 50,
+    'tic-tac-toe': 50,
     'vote': 56,
     'monks-problems-1': 333,
     'monks-problems-2': 334,
     'irish': 451,
     'profb': 470,
     'mv': 881,
-    'molecular_biology_promoters': 956,
+    'molecular-biology_promoters': 956,
     'kdd_internet_usage': 981,
     'ada_prior': 1037,
     'blogger': 1463,
     'thoracic-surgery': 1506,
     'wholesale-customers': 1511,
+    'adult': 1590,
     'cylinder-bands': 6332,
     'dresses-sales': 23381,
     'SpeedDating': 40536,
@@ -220,6 +220,65 @@ def smart_sort(experiments, num_small_per_large=100, random=False):
     return [experiments[i] for i in indices]
 
 
+def remove_failed_main8(experiments, result_folder):
+    """
+    logs are in the form "success_dataset_encoder"
+    """
+
+    print("Removing failed runs.")
+
+    # --- Find the failed logs
+    failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
+
+    return [x for x in experiments if f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}.json" not in failed_runs]
+
+
+def remove_failed_main9(experiments, result_folder):
+    """
+    logs are in the form "success_dataset_encoder"
+    """
+
+    print("Removing failed runs.")
+
+    # --- Find the failed logs
+    failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
+
+    return [x for x in experiments if f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}.json" not in failed_runs]
+
+def remove_concluded_main8(experiments, result_folder, model=None):
+    print("Removing completed runs.")
+
+    # --- Load df_concatenated
+    try:
+        df_concatenated = pd.read_csv(os.path.join(result_folder, "main8_final.csv"))
+    except FileNotFoundError:
+        df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+
+    if model is not None:
+        df_concatenated = df_concatenated.query("model == @model")
+
+    # --- Mask of non completed runs
+    groups = set(df_concatenated.groupby("dataset encoder".split()).groups)
+    return [x for x in experiments if (x[0], get_acronym(x[1].__str__(), underscore=False)) not in groups]
+
+def remove_concluded_main9(experiments, result_folder, model=None):
+    print("Removing completed runs.")
+
+    # --- Load df_concatenated
+    try:
+        df_concatenated = pd.read_csv(os.path.join(result_folder, "main9_final.csv"))
+    except FileNotFoundError:
+        df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+
+    if model is not None:
+        df_concatenated = df_concatenated.query("model == @model")
+
+    # --- Mask of non completed runs
+    groups = set(df_concatenated.groupby("dataset encoder".split()).groups)
+    return [x for x in experiments if (x[0], get_acronym(x[1].__str__(), underscore=False)) not in groups]
+
+
+
 def remove_concluded_runs(all_experiments, result_folder, repeat_unsuccessful=False):
     """
     Checks for every experiment in all_experiments whether it was already run or not.
@@ -250,7 +309,7 @@ def remove_concluded_runs(all_experiments, result_folder, repeat_unsuccessful=Fa
 
         if len(experiment) == 7:  # main6 style output files. Handles only the new format.
             main_version = 6
-            warnings.WarningMessage("Only new (acronym) style files are checked")
+            # warnings.WarningMessage("Only new (acronym) style files are checked")
             dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring = experiment
             exec_log = {
                 "exit_status": 0,  # see doc
@@ -357,139 +416,6 @@ def find_bins(universe, weights: np.ndarray, thr):
     return tmp
 
 
-def t_test(v1, v2, alpha=0.05, corrected=True):
-    """
-    Test whether one of v1 or v2 is statistically greater than the other.
-    Assume v1 and v2 are results from a cross validation
-    Add Bengio correction term (2003)
-    """
-    if len(v1) != len(v2):
-        raise ValueError("The inputs should have equal length.")
-
-    n = len(v1)
-
-    diff = v1 - v2
-    avg = diff.mean()
-    std = diff.std()
-    if std == 0:
-        return 0, 0, 0, 0
-
-    # test training ratio
-    ttr = 1 / (n - 1)
-
-    adjstd = np.sqrt(1 / n + ttr) * std if corrected else np.sqrt(1 / n) * std
-    tstat = avg / adjstd
-
-    df = n - 1
-    crit = t.ppf(1.0 - alpha, df)
-    p = (1.0 - t.cdf(np.abs(tstat), df)) * 2.0
-    return p, tstat, df, crit
-def compare_with_ttest(v1, v2, alpha=0.05, corrected=True):
-    """
-    returns 0 if the two are indistinguishable
-    returns 1 if v1 is "greater than" v2
-    returns 2 if v2 is "greater than" v1
-
-    """
-
-    if (v1 == v2).all():
-        return 0, 1
-
-    p, s1, s2, s3 = t_test(v1, v2, alpha=alpha, corrected=corrected)
-
-    if p >= alpha:
-        return 0, p
-    else:
-        if (v1 - v2).mean() > 0:
-            return 1, p
-        else:
-            return 2, p
-
-
-def get_dominating(R):
-    """
-    Retrieves the indices of non-dominated elements and "removes" them from the matrix.
-    At the end of the recursive process, the result is a list of nested sets.
-    """
-    if np.linalg.norm(R - np.ones_like(R)) == 0:
-        return [set(range(len(R)))]
-
-    non_dominated = []
-    R = R.copy()
-    for i in range(len(R)):
-        if R[i, :].sum() == len(R):
-            non_dominated.append(i)
-    # having found the index of non-dominated rows, we can make the corresponding columns ininfluent
-    # ie make the other indices dominate also the dominating indices
-    for i in non_dominated:
-        R[i, :] = np.ones_like(R[i, :])
-        R[:, i] = np.ones_like(R[:, i])
-    final_rank = [set(non_dominated)]
-    final_rank.extend(get_dominating(R))
-    return final_rank
-
-
-def filter_rank(r):
-    """
-    Transforms a list of nested sets into a list of increments
-    """
-    return [r[0]] + [r[i]-r[i-1] for i in range(1, len(r))]
-
-
-def test_totality(R):
-
-    """
-    Tests for totality of a relation. Bonus come riflexivity.
-    """
-    if len(R.shape) >= 3 or R.shape[0] != R.shape[1]:
-        raise ValueError(f"The input should be a square matrix but has shape {R.shape}.")
-    return reduce(
-        lambda x, y: x and y,
-        [
-            R[i, j] + R[j, i] >= 1
-            for i, j in product(range(len(R)), repeat=2)
-        ]
-    )
-
-
-def test_transitivity(R):
-    if len(R.shape) >= 3 or R.shape[0] != R.shape[1]:
-        raise ValueError(f"The input should be a square matrix but has shape {R.shape}.")
-    return reduce(
-        lambda x, y: x and y,
-        [
-            R[i, j] + R[j, k] - R[i, k] <= 1
-            for i, j, k in product(range(len(R)), repeat=3)
-        ]
-    )
-
-
-def get_rank_from_matrix(R, e2i):
-    """
-    If the matrix satisfies totality, riflexivity, and transitivity properties (ie weak order), extract the rank
-    of every element that is key in e2i.
-    Two procedures are possible:
-        best first: take rows with maximum sum (dominating everything)
-        worst frst: take columns with maximum sum (dominated by everything)
-    """
-
-    raise Exception("Deprecated. Use Aggregator._get_rank_from_matrix.")
-
-    # test for totality
-    if not test_totality(R):
-        raise ValueError("Input matrix is not a total relation, hence not a weak order.")
-    elif not test_transitivity(R):
-        raise ValueError("Input matrix is not a transitive relation, hence not a weak order.")
-
-    rank = {}
-    for E, i in e2i.items():
-        for j, dom in enumerate(filter_rank(get_dominating(R))):
-            if i in dom:
-                rank[E] = j
-                continue
-    return rank
-
-
 def get_lgbm_scoring(scoring):
     def lgbm_scoring(y_true, y_pred):
         return scoring.__name__, scoring(y_true, np.round(y_pred)), True
@@ -569,14 +495,6 @@ def get_pipe_search_space_one_encoder(model, encoder):
         raise ValueError(
             f"Model with representation {repr(model)} is not valid")
 
-    if "SmoothedTE" in repr(encoder):
-        out.update({
-            "preproc__encoder__encoder__w": Real(0, 20)
-        })
-    # elif "CVTargetEncoder" in repr(encoder):
-    #     out.update({
-    #         "preproc__encoder__n_splits": Integer(2, 10)
-    #     })
     return out
 
 

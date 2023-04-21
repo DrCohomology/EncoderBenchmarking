@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import openml
 import os
+import matplotlib as mpl
 import pandas as pd
 import random
 import re
@@ -71,8 +72,197 @@ reload(e)
 reload(u)
 reload(rc)
 
-import category_encoders
-reload(category_encoders)
+#%% Label encoder VS Ordinal encoder
+
+be = e.BinaryEncoder()
+
+df = pd.DataFrame([
+    ("b", 0),
+    ("a", 1),
+    ("a", 0),
+    ("c", 1),
+    ("d", 0)
+], columns=["A", "y"])
+
+X = df.drop("y", axis=1)
+y = df.y
+
+xl = be.fit_transform(X)
+
+
+
+#%% Sum encoder
+from sklearn.linear_model import LinearRegression
+from category_encoders import SumEncoder, OneHotEncoder
+from scipy.stats import pearsonr as corr
+
+
+df = pd.DataFrame([
+    ("b", 0),
+    ("a", 1),
+    ("a", 0),
+    ("c", 1),
+], columns=["A", "y"])
+
+se = SumEncoder()
+ohe = OneHotEncoder()
+lr = LinearRegression(fit_intercept=False)
+
+X = df.drop("y", axis=1)
+y = df.y
+
+XE = se.fit_transform(X)
+XE2 = ohe.fit_transform(X)
+lr.fit(XE, y)
+print(lr.coef_)
+
+lr2 = LinearRegression(fit_intercept=False)
+lr2.fit(XE2, y)
+print(lr2.coef_)
+
+# for col in XE2:
+#     print(corr(XE2[col], y))
+
+
+#%%
+
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "times new roman",
+    'axes.unicode_minus': False
+})
+
+
+df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": [10, 20, 30]}, index=range(3))
+
+a = "a"
+
+sns.set_theme(style="whitegrid", font_scale=0.5)
+sns.despine(trim=True, left=True)
+
+grid = sns.FacetGrid(df, col=f"{a}", row="b",
+                     margin_titles=True, sharex="all", sharey="all",
+                     aspect=0.4)
+grid.set_titles(row_template="${row_name}$", col_template="${col_name}$")
+
+grid.map_dataframe(sns.lineplot)
+
+# t = np.linspace(0.0, 1.0, 100)
+#
+# s = np.cos(4 * np.pi * t) + 2
+#
+# fig, ax = plt.subplots(figsize=(6, 4), tight_layout=True)
+# ax.plot(t, s)
+#
+# ax.set_xlabel(r'\textbf{time (s)}')
+# ax.set_ylabel('\\textit{Velocity (\N{DEGREE SIGN}/sec)}', fontsize=16)
+# ax.set_title(r'\TeX\ is Number $\sum_{n=1}^\infty'
+#              r'\frac{-e^{i\pi}}{2^n}$!', fontsize=16, color='r')
+plt.show()
+
+#%% Matricial computation of kendall distance. it is inefficient :(
+
+from numba import njit
+
+r1 = np.array((1, 3, 2, 4))
+r2 = np.array((2, 4, 1, 3))
+
+"""
+1. Take a matrix by rolling the vector
+2. Take the difference matrix with the first element of each row
+3. hadamard product, take sign, opposite, add 1, divide by 2
+"""
+
+@njit
+def get_m(r):
+
+    a = np.zeros((len(r), len(r)))
+    for i in range(len(a)):
+        a[i] = np.roll(r, i)
+
+
+
+    return np.triu(a).T
+
+@njit
+def get_d(m):
+    """
+    d[i, j] = m[i, 0] - m[i, j+1] for j = 0...
+    """
+    return -np.tril(np.cumsum(np.diff(m), axis=1)[1:])
+
+@njit
+def dk(d1, d2):
+    return np.sum(-np.minimum(np.sign(d1*d2), 0))
+
+def d_kendall2(r1, r2):
+    return dk(get_d(get_m(r1)), get_d(get_m(r2)))
+
+def d_kendall3(r1, r2):
+    return np.sum(-np.minimum(np.sign(
+        -np.tril(np.cumsum(np.diff(np.triu([np.roll(r1, i) for i in np.arange(len(r1))]).T), axis=1)[1:]) *\
+        -np.tril(np.cumsum(np.diff(np.triu([np.roll(r2, i) for i in np.arange(len(r2))]).T), axis=1)[1:])
+    ), 0))
+
+
+#%% not sure what this is
+np.random.seed(10)
+
+df = pd.read_csv(u.RESULT_FOLDER + "\\main6_final.csv")
+
+dataset = "adult"
+model1 = "DecisionTreeClassifier"
+model2 = "LGBMClassifier"
+scoring1 = "roc_auc_score"
+scoring2 = "accuracy_score"
+
+def get_rank(df, dataset, model, scoring):
+    return df.query("dataset == @dataset and model == @model and scoring == @scoring").groupby("encoder")\
+           .cv_score.agg(["mean", "std"]).sort_values("mean", ascending=False).index
+
+rank11 = get_rank(df, dataset, model1, scoring1)
+rank12 = get_rank(df, dataset, model1, scoring2)
+rank21 = get_rank(df, dataset, model2, scoring1)
+
+df2 = pd.read_csv(u.RESULT_FOLDER + "\\main8_final.csv")
+rank112 = get_rank(df2, dataset, model1, scoring1)
+
+ranks = [rank11, rank12, rank21]
+
+for (i1, r1), (i2, r2) in itertools.product(enumerate(ranks), repeat=2):
+    print(i1, i2, kendalltau(r1, r2, variant='b').correlation)
+
+#%%
+
+dataset = "tic-tac-toe"
+X, y, categorical_indicator, attribute_names = get_dataset(u.DATASETS[dataset]).get_data(
+    target=get_dataset(u.DATASETS[dataset], download_data=False).default_target_attribute, dataset_format="dataframe"
+)
+X = X.dropna(axis=0, how="all").dropna(axis=1, how="all").sample(10)
+y = pd.Series(e.LabelEncoder().fit_transform(y[X.index]), name="target")
+
+X.reset_index(drop=True, inplace=True)
+y.reset_index(drop=True, inplace=True)
+
+enc1 = e.MEstimateEncoder(m=10)
+XE = enc1.fit_transform(X, y)
+
+
+col = "top-left-square"
+c1 = XE[col]
+
+encoding = defaultdict(lambda: {})
+
+X = X.join(y.squeeze())
+global_mean = y.mean()
+w = 10
+temp = X.groupby(col).agg(['sum', 'count'])
+temp['ME'] = (temp.target['sum'] + w * global_mean) / (temp.target['count'] + w)
+# temp['TE'] = temp.target['sum'] / temp.target['count']
+encoding[col].update(temp['ME'].to_dict())
+
+
+
 
 
 

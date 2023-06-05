@@ -39,7 +39,7 @@ mpl.rcParams['text.latex.preamble'] = r'\\usepackage{nicefrac}'
 mpl.rc('font', family='serif')
 """
 
-SAVESTATE_FOLDER = os.path.join(u.RESULT_FOLDER, "Savestates", "ranking_save_states")
+SAVESTATE_FOLDER = os.path.join(u.RESULTS_DIR, "Savestates", "ranking_save_states")
 
 def load_results(experiment_name, remove_incomplete_encoders, remove_incomplete_datasets, printme=True):
 

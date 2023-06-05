@@ -334,9 +334,9 @@ reload(ru)
 try:
     df
 except NameError:
-    df = pd.read_csv(os.path.join(u.RESULT_FOLDER, "main8_final.csv")).drop_duplicates()
+    df = pd.read_csv(os.path.join(u.RESULTS_DIR, "main8_final.csv")).drop_duplicates()
 
-folder = os.path.join(os.path.dirname(u.RESULT_FOLDER), "main8_aggregation_optima")
+folder = os.path.join(os.path.dirname(u.RESULTS_DIR), "main8_aggregation_optima")
 
 run = False
 if run:
@@ -381,7 +381,7 @@ if save:
 
 #%% Analysis
 
-folder = os.path.join(os.path.dirname(u.RESULT_FOLDER), "main8_aggregation_optima")
+folder = os.path.join(os.path.dirname(u.RESULTS_DIR), "main8_aggregation_optima")
 
 model = "KNeighborsClassifier"
 scoring = "roc_auc_score"
@@ -398,7 +398,7 @@ reload(ru)
 alpha = 0.05
 
 pk = ["dataset", "model", "scoring", "fold", "encoder"]
-df = pd.read_csv(os.path.join(u.RESULT_FOLDER, "main8_final.csv")).drop_duplicates()
+df = pd.read_csv(os.path.join(u.RESULTS_DIR, "main8_final.csv")).drop_duplicates()
 
 # !!! duplicates run are still there: instead, average on pks
 df = df.groupby(pk).mean().reset_index()

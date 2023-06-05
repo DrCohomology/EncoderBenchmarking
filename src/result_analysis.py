@@ -12,6 +12,7 @@ import seaborn as sns
 
 from collections import defaultdict
 from functools import reduce
+from importlib import reload
 from itertools import product
 from pathlib import Path
 from scipy.stats import kendalltau, iqr
@@ -25,21 +26,14 @@ import src.results_concatenator as rc
 import src.rank_utils as ru
 
 # Setup plotting with LaTeX
+sns.set_theme(style="whitegrid", font_scale=1)
+sns.despine(trim=True, left=True)
 plt.rcParams.update({
     "text.usetex": True,
-    "font.family": "times new roman"
+    "font.family": "times new roman",
 })
 
-latex_name = {
-    "taub": r"$\tau_b$",
-    "taub_std": r"$\sigma(\tau_b)$",
-    "agrbest": r"$\alpha_{best}$",
-    "agrbest_std": r"$\sigma(\alpha_{best})$",
-    "agrworst": r"$\alpha_{worst}$",
-    "agrworst_std": r"$\sigma(\alpha_{worst})$",
-}
-
-#%% 0a. Define all experiments
+# %% 0a. Define all experiments
 rlibs = None
 std = [e.BinaryEncoder(), e.CatBoostEncoder(), e.CountEncoder(), e.DropEncoder(), e.MinHashEncoder(), e.OneHotEncoder(),
        e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.SumEncoder(), e.TargetEncoder(), e.WOEEncoder()]
@@ -50,11 +44,12 @@ bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
 binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
 ste = [e.MEstimate(m=m) for m in [1e-1, 1, 10]]
-encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte, ste])
+encoders = reduce(lambda x, y: x + y, [std, cvglmm, cvte, buglmm, bute, dte, binte, ste])
 encoders = set(u.get_acronym(str(x), underscore=False) for x in encoders)
 
 scorings = ["ACC", "AUC", "F1"]
 
+datasets_small_keys = set(u.DATASETS_SMALL.keys())
 datasets_small = set(u.DATASETS_SMALL.values())
 datasets_all = set(u.DATASETS.values())
 
@@ -68,13 +63,13 @@ exp_notuning = set(product(encoders, datasets_all, models_notuning, ["no"], scor
 
 exp_total = exp_fulltuning.union(exp_modeltuning).union(exp_notuning)
 
-#%% 0b. Loading and cleaning
+# %% 0b. Loading and cleaning
 
-mains = [pd.read_csv(Path(f"{u.RESULT_FOLDER}/main{x}_final.csv")) for x in [6, 8, 9]]
+mains = [pd.read_csv(Path(f"{u.RESULTS_DIR}/main{x}_final.csv")) for x in [6, 8, 9]]
 
 # --- There are extra runs for full tuning, remove them
 mains[0] = mains[0].drop(mains[0][(mains[0].model != "LGBMClassifier") &
-                                  (~ mains[0].dataset.isin(datasets_small))].index)
+                                  (~ mains[0].dataset.isin(set(u.DATASETS_SMALL.keys())))].index)
 
 df = pd.concat(mains, ignore_index=True).drop(columns="scaler")
 df["time"] = df["time"].fillna(df["tuning_time"])
@@ -105,9 +100,9 @@ df.dataset = df.dataset.map(lambda x: u.DATASETS[x])
 # --- Move LGBM from full tuning to no tuning
 df.loc[df.model == "LGBMC", "tuning"] = "no"
 
-df.to_csv(Path(u.RESULT_FOLDER, "final.csv"), index=False)
+df.to_csv(Path(u.RESULTS_DIR, "final.csv"), index=False)
 
-#%% 1a. Missing evaluations analysis
+# %% 1a. Missing evaluations analysis
 
 exp_completed = set(df.groupby(pk_exp).groups)
 
@@ -125,14 +120,38 @@ for col in missing.columns:
     total = df.groupby(col).size() / 5 + miss  # remove folds
     missing_fraction[col] = pd.concat([miss, total], axis=1).fillna(0).sort_values(0).astype(int)
 
-#%% 1b. Overall results (EMPTY)
-pass
+# %% 1b. Different rankings -> Different evaluations
 
-#%% 2a. Store rank functions
+df, rf = u.load_df_rf()
+
+model = "LR"
+scoring = "AUC"
+tuning = "no"
+
+df = df.query("model == @model and scoring == @scoring and tuning == @tuning")
+rf = rf.loc(axis=1)[:, model, tuning, scoring]
+rf = rf / rf.max()
+
+rdiff = rf.max() - rf.min()
+qdiff = df.groupby(["dataset", "model", "tuning", "scoring", "encoder"]).cv_score.mean() \
+    .groupby(["dataset", "model", "tuning", "scoring"]).agg(["max", "min"])
+qdiff = qdiff["max"] - qdiff["min"]
+qdiff.index = qdiff.index.set_levels([idx.astype(str) for idx in qdiff.index.levels])
+
+dd = pd.concat([rdiff, qdiff], axis=1)
+
+plt.scatter(dd[0], dd[1])
+plt.xlabel("rank difference")
+plt.ylabel("performance difference")
+plt.show()
+
+# weird examples with 1 in variation
+# df.query("dataset == 43922 and model == 'SVC' and tuning == 'full' and scoring == 'F1'").groupby("encoder").cv_score.mean()
+
+
+# %% 2a. Store rank functions
 
 pk_noencoder = ["dataset", "model", "tuning", "scoring"]
-
-rankings_folder = Path(u.RESULT_FOLDER).parent / "Rankings"
 
 run = False
 if run:
@@ -151,800 +170,379 @@ if run:
     cv_score = pd.DataFrame(cv_scored)
     cv_score_std = pd.DataFrame(cv_score_stdd)
 
-    rf.to_csv(Path(rankings_folder, "rank_function_from_average_cv_score.csv"))
+    rf.columns.name = ("dataset", "model", "tuning", "scoring")
+    rf.to_csv(u.RANKINGS_DIR / "rank_function_from_average_cv_score.csv")
     cv_score.to_csv(Path(rankings_folder, "average_cv_score.csv"))
     cv_score_std.to_csv(Path(rankings_folder, "std_cv_score.csv"))
 
-# df.query("dataset == 1235 and model == 'DTC' and tuning == 'model' and scoring == 'ACC' and encoder in ['BE', 'CBE']").groupby
-
-# --  Make the names consistent with df: dataset -> openML.id; model -> acronym; scoring -> Kurzung
-# sc_map = {"accuracy_score": "ACC", "roc_auc_score": "ROC", "f1_score": "F1"}
-# rf.columns = rf.columns.map(lambda x: (u.DATASETS[x[0]], u.get_acronym(x[1], underscore=False), x[2], sc_map[x[3]]))
-pass
-
-#%% 2b. Compute and store correlation metrics
+# %% 2b. Compute and store correlation metrics
 """
-Compute taub, agrbest, and agrworst for all pairs of rankings. 
-It takes ~6 hrs, likely due to the dataframe implementation. A better way would be to compute a matrix and then make it 
-    into a dataframe. In this case, it should take ~1 hr. Another optimization is not to consider every pair,
-    but just the relevant ones
-The remaining missing values are due to constant rank functions, which messes up kendall_tau
-It is an obvious problem which was already known, kendall cannot work with tied rankings
-However, I could not find any reference to this fact (~10 mins)
-I shall just ignore them in the analysis (for now)
+Just made way more efficient by removing unnecessary comparisons. Now ~2 mins.
+rf.columns.levels ~= [dataset, model, tuning, scoring]
 """
 
-# !!! Future work: implement my own and run with numba
-# This is to be done after all experiments have been re-run as it takes a while
-def kendall_taub():
-    pass
-
-
-rankings_folder = Path(u.RESULT_FOLDER).parent / "Rankings"
-
-rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv",
-                 index_col=0, header=[0, 1, 2, 3])
-
-# Mtaub = np.zeros((len(rf.columns), len(rf.columns)))
-# for (i1, col1), (i2, col2) in tqdm(list(product(enumerate(rf.columns), repeat=2))):
-#     Mtaub[i1, i2] = kendalltau(rf[col1], rf[col2], variant="b", nan_policy="omit")[0]
-#     if i1 == 10:
-#         break
+rf = u.load_rf()
 
 run = False
 if run:
-    # For every pair of columns, compute: taub, agreement on best, agreement on worst
-    taub = pd.DataFrame(index=rf.columns, columns=rf.columns)
-    agrbest = pd.DataFrame(index=rf.columns, columns=rf.columns)
-    agrworst = pd.DataFrame(index=rf.columns, columns=rf.columns)
-    for (i1, col1), (i2, col2) in tqdm(list(product(enumerate(rf.columns), repeat=2))):
-        if i1 >= i2:
-            continue
-        taub.loc[col1, col2] = kendalltau(rf[col1], rf[col2], variant="b", nan_policy="omit")[0]
-        agrbest.loc[col1, col2] = ru.agreement(rf[col1], rf[col2], best=True)
-        agrworst.loc[col1, col2] = ru.agreement(rf[col1], rf[col2], best=False)
+    # sensitivity to change in model (everything else fixed)
+    taub_model, agrbest_model, agrworst_model, rho_model = u.pairwise_similarity_wide_format(rf,
+                                                                                             simfuncs=[ru.kendall_tau,
+                                                                                                       ru.agreement_best,
+                                                                                                       ru.agreement_worst,
+                                                                                                       ru.spearman_rho],
+                                                                                             shared_levels=[0, 2, 3])
 
-    # They are antisymmetric
-    taub = taub.fillna(taub.T)
-    agrbest = agrbest.fillna(agrbest.T)
-    agrworst = agrworst.fillna(agrworst.T)
+    # sensitivity to change in tuning (everything else fixed)
+    taub_tuning, agrbest_tuning, agrworst_tuning, rho_tuning = u.pairwise_similarity_wide_format(rf,
+                                                                                                 simfuncs=[
+                                                                                                     ru.kendall_tau,
+                                                                                                     ru.agreement_best,
+                                                                                                     ru.agreement_worst,
+                                                                                                     ru.spearman_rho],
+                                                                                                 shared_levels=[0, 1,
+                                                                                                                3])
 
-    for i in range(len(taub)):
-        assert np.isnan(taub.iloc[i, i]) and np.isnan(agrbest.iloc[i, i]) and np.isnan(agrworst.iloc[i, i])
+    # sensitivity to change in scoring (everything else fixed)
+    taub_scoring, agrbest_scoring, agrworst_scoring, rho_scoring = u.pairwise_similarity_wide_format(rf,
+                                                                                                     simfuncs=[
+                                                                                                         ru.kendall_tau,
+                                                                                                         ru.agreement_best,
+                                                                                                         ru.agreement_worst,
+                                                                                                         ru.spearman_rho],
+                                                                                                     shared_levels=[0,
+                                                                                                                    1,
+                                                                                                                    2])
 
-        taub.iloc[i, i] = 1
-        agrbest.iloc[i, i] = 1
-        agrworst.iloc[i, i] = 1
+    taub = reduce(lambda x, y: x.fillna(y), [taub_model, taub_scoring, taub_tuning])
+    agrbest = reduce(lambda x, y: x.fillna(y), [agrbest_model, agrbest_scoring, agrbest_tuning])
+    agrworst = reduce(lambda x, y: x.fillna(y), [agrworst_model, agrworst_scoring, agrworst_tuning])
+    rho = reduce(lambda x, y: x.fillna(y), [rho_model, rho_tuning, rho_scoring])
 
-    # --  Make the names consistent with df and rf: dataset -> openML.id; model -> acronym; scoring -> Kurzung
-    # sc_map = {"accuracy_score": "ACC", "roc_auc_score": "ROC", "f1_score": "F1"}
-    # taub.columns = taub.index = taub.columns.map(lambda x: (str(u.DATASETS[x[0]]),
-    #                                                         u.get_acronym(x[1], underscore=False),
-    #                                                         x[2],
-    #                                                         sc_map[x[3]]))
-    # agrbest.columns = agrbest.index = agrbest.columns.map(lambda x: (str(u.DATASETS[x[0]]),
-    #                                                                  u.get_acronym(x[1], underscore=False),
-    #                                                                  x[2],
-    #                                                                  sc_map[x[3]]))
-    # agrworst.columns = agrworst.index = agrworst.columns.map(lambda x: (str(u.DATASETS[x[0]]),
-    #                                                                     u.get_acronym(x[1], underscore=False),
-    #                                                                     x[2],
-    #                                                                     sc_map[x[3]]))
+    taub.to_csv(u.RANKINGS_DIR / "pw_kendall_tau_b_nan=omit.csv")
+    agrbest.to_csv(u.RANKINGS_DIR / "pw_agrbest.csv")
+    agrworst.to_csv(u.RANKINGS_DIR / "pw_agrworst.csv")
+    rho.to_csv(u.RANKINGS_DIR / "pw_rho.csv")
 
-    taub.to_csv(rankings_folder / "pw_kendall_tau_b_nan=omit.csv")
-    agrbest.to_csv(rankings_folder / "pw_agrbest.csv")
-    agrworst.to_csv(rankings_folder / "pw_agrworst.csv")
+# %% 2b2. Taub p-value
 
-#%% 2c1. Factor stability approach 1
+rf = u.load_rf()
+
+ptaub_model = u.pairwise_similarity_wide_format(rf,
+                                                simfuncs=[ru.kendall_tau_p],
+                                                shared_levels=[0, 2, 3])[0]
+
+# sensitivity to change in tuning (everything else fixed)
+ptaub_tuning = u.pairwise_similarity_wide_format(rf,
+                                                 simfuncs=[ru.kendall_tau_p],
+                                                 shared_levels=[0, 1, 3])[0]
+
+# sensitivity to change in scoring (everything else fixed)
+ptaub_scoring = u.pairwise_similarity_wide_format(rf,
+                                                  simfuncs=[ru.kendall_tau_p],
+                                                  shared_levels=[0, 1, 2])[0]
+
+ptaub = reduce(lambda x, y: x.fillna(y), [ptaub_model, ptaub_scoring, ptaub_tuning])
+ptaub.to_csv(u.RANKINGS_DIR / "pw_kendall_tau_b_p_nan=omit.csv")
+
+# %% !!! 2c. Factor sensitivity
 """
-Model stability is the change in ranking when everything is fixed but the model
+Model sensitivity is the change in ranking when everything is fixed but the model
 Approach 1: for every DTS, compute average (on M) correlation (excluding self-correlation and nans). 
     Note that agrbest and agrworst do not have nans (not even when the rankings are degenerate). 
     The plots are then boxplots of the correlation metrics, in which we control for other variables
         (for instance, we are able to see if one dataset has consistent rankings of encoders for different models)
         This second level of grouping SHOULD be equivalent to just considering both factors at once.    
-"""
-
-
-def index_sorted_by_median(df, groupby_col, target_col):
-    return df.groupby(groupby_col)[target_col].median().sort_values().index
-
-
-def get_avg_corr_model(df_corr):
-    """
-    Assumed that df_corr.columns is a MultiIndex [dataset, model, tuning, scoring].
-    Ignores nans and the diagonal (ie correlation of item with itself)
-    """
-    t = pd.Series({idx: np.nanmean(np.tril(temp.xs(idx, level=[0, 2, 3], axis=1), -1))
-                   for idx, temp in df_corr.groupby(level=[0, 2, 3])}).to_frame().reset_index()
-    t.columns = ["dataset", "tuning", "scoring", "corr"]
-    return t
-
-
-# taub, agrbest, agrworst = load_correlation_dataframes()
-#
-# avg_corr = reduce(lambda l, r: l.merge(r, on=["dataset", "tuning", "scoring"], how="inner"),
-#                   [get_avg_corr_model(taub), get_avg_corr_model(agrbest), get_avg_corr_model(agrworst)])
-# avg_corr.columns = ["dataset", "tuning", "scoring", "taub", "agrbest", "agrworst"]
-#
-# fig, axes = plt.subplots(3, 4, figsize=(12, 12), sharey="col")
-# fig.suptitle("Average correlation for fixed everything except model")
-#
-# for y, axrow in zip(["taub", "agrbest", "agrworst"], axes):
-#     for x, ax in zip([None, "dataset", "tuning", "scoring"], axrow):
-#         sns.boxplot(avg_corr, ax=ax, x=x, y=y,
-#                     order=index_sorted_by_median(avg_corr, x, y) if x == "dataset" else None)
-#         if x == "dataset":
-#             ax.set_xticks([])
-#
-# plt.tight_layout()
-# plt.show()
-
-pass
-
-#%% 2c2. Factor Stability approach 2 (no dataset - too many)
-"""
+    Use plot_type='heatmap' option
+        
 Approach 2: for every DTS, compute the correlation matrix (corr(Ri, Rj)_ij, where Ri and Rj are rankings 
     for models i and j resp. Then, aggregate over DTS, i.e., get the 3-tensor or rank correlation (Model1, Model2, DTS)
-    and boxplot over DTS. This will give a matrix of boxplots  
+    and boxplot over DTS. This will give a matrix of boxplots      
+    Use plot_type='boxplots' option
 """
+reload(u)
+reload(ru)
+
+sims = u.load_similarity_dataframes()
+taub = sims["pw_kendall_tau_b_p_nan=omit.csv"]
+ptaub = sims['pw_kendall_tau_b_nan=omit.csv']
+rho = sims["pw_rho.csv"]
+agrworst = sims["pw_agrworst.csv"]
+agrbest = sims["pw_agrbest.csv"]
+
+factors = ["model"]
+similarities = ["rho"]
+# for factor in factors:
+#     df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
+#                               comparison_level=factor)
+#
+# for similarity in similarities:
+#     u.plot_long_format_similarity_dataframe(df_sim, similarity, comparison_level=factor, plot_type="heatmap",
+#                                             color="black",
+#                                             save_plot=False, show_plot=True, draw_points=False,
+#                                             figsize_inches=(1.75, 2.5))
+
+similarity = "rho"
+cmap = "rocket"
+
+similarity_ = similarity
+similarity = u.SIMILARITY_LATEX[similarity]
+
+fig, axes = plt.subplots(1, 3, figsize=(5.5, 3.5), gridspec_kw={'width_ratios': [1, 1, 1]})
+ypos = -0.6
+
+# ---- model
+ax = axes[0]
+comparison_level = "model"
+df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
+                          comparison_level=comparison_level)
+df_sim = df_sim.rename(columns=u.SIMILARITY_LATEX)
+cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
+median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
+    .pivot(index=cl[0], columns=cl[1]) \
+    .droplevel([0], axis=1)
+
+ax = sns.heatmap(median_similarity, annot=True, ax=ax,
+                 vmin=-1 if similarity_ in {"taub", "rho"} else 0,
+                 vmax=1,
+                 cmap=cmap,
+                 square=True, cbar=False, annot_kws={"fontsize": 8})
+ax.set(xlabel=None, ylabel=None)
+ax.set_xticklabels(
+    ax.get_xticklabels(),
+    rotation=90,
+    horizontalalignment='right',
+    fontweight='light',
+    fontsize=10
+)
+ax.set_yticklabels([])
+ax.set_title("(a)", y=ypos)
+
+# ---- tuning
+ax = axes[1]
+
+comparison_level = "tuning"
+df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
+                          comparison_level=comparison_level)
+df_sim = df_sim.rename(columns=u.SIMILARITY_LATEX)
+cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
+median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
+    .pivot(index=cl[0], columns=cl[1]) \
+    .droplevel([0], axis=1)
+
+ax = sns.heatmap(median_similarity, annot=True, ax=ax,
+                 vmin=-1 if similarity_ in {"taub", "rho"} else 0,
+                 vmax=1,
+                 cmap=cmap,
+                 square=True, cbar=False)
+ax.set(xlabel=None, ylabel=None)
+ax.set_xticklabels(
+    ax.get_xticklabels(),
+    rotation=90,
+    horizontalalignment='right',
+    fontweight='light',
+    fontsize=10
+)
+ax.set_yticklabels([])
+ax.set_title("(b)", y=ypos)
+
+# ---- scoring
+ax = axes[2]
+
+comparison_level = "scoring"
+df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
+                          comparison_level=comparison_level)
+df_sim = df_sim.rename(columns=u.SIMILARITY_LATEX)
+cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
+median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
+    .pivot(index=cl[0], columns=cl[1]) \
+    .droplevel([0], axis=1)
+
+ax = sns.heatmap(median_similarity, annot=True, ax=ax,
+                 vmin=-1 if similarity_ in {"taub", "rho"} else 0,
+                 vmax=1,
+                 cmap=cmap,
+                 square=True, cbar=False, cbar_kws={"shrink": .45})
+ax.set(xlabel=None, ylabel=None)
+ax.set_xticklabels(
+    ax.get_xticklabels(),
+    rotation=90,
+    horizontalalignment='right',
+    fontweight='light',
+    fontsize=10
+)
+ax.set_yticklabels([])
+ax.set_title("(c)", y=ypos)
+
+# ---- colorbar
+# ax = axes[3]
+# sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-1, 1))
+# sm.set_array([])
+#
+# plt.colorbar(sm, cax=ax, shrink=0.4, fraction=5)
+
+plt.tight_layout(pad=0.5, rect=[0, 0.2, 1, 1])
+plt.show()
 
 
-def load_correlation_dataframes(folder):
-    # load (indexed) matrices of rank correlations
-    taub = pd.read_csv(folder / "pw_kendall_tau_b_nan=omit.csv", index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
-    agrbest = pd.read_csv(folder / "pw_agrbest.csv", index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
-    agrworst = pd.read_csv(folder / "pw_agrworst.csv", index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
+# %% 2c2. Factor sensitivity multisimilarity
 
-    # fix: the dataset ID is not read as string
-    taub.index = taub.index.set_levels(taub.index.levels[0].astype(str), level=0)
-    agrbest.index = agrbest.index.set_levels(agrbest.index.levels[0].astype(str), level=0)
-    agrworst.index = agrworst.index.set_levels(agrworst.index.levels[0].astype(str), level=0)
+reload(u)
+reload(ru)
 
-    # rename the index and column levels
-    factors = ["dataset", "model", "tuning", "scoring"]
+sims = u.load_similarity_dataframes()
+taub = sims["pw_kendall_tau_b_p_nan=omit.csv"]
+ptaub = sims['pw_kendall_tau_b_nan=omit.csv']
+rho = sims["pw_rho.csv"]
+agrworst = sims["pw_agrworst.csv"]
+agrbest = sims["pw_agrbest.csv"]
 
-    for idx in [taub.index, taub.columns, agrbest.index, agrbest.columns, agrworst.index, agrworst.columns]:
-        idx.rename(factors, inplace=True)
+factors = ["model", "tuning", "scoring"]
+similarities = ["rho", "agrbest"]
 
-    return taub, agrbest, agrworst
+fig, axes = plt.subplots(1, len(factors), figsize=(5.5, 5.5/len(factors)))
+for (ax, factor) in zip(axes, factors):
+    df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
+                              comparison_level=factor)
+    u.heatmap_longformat_multisim(df_sim, similarities, factor, fontsize=8, annot_fontsize=8,
+                                  save_plot=False, show_plot=False, ax=ax)
 
-
-# dataset, tuning, scoring, model1, model2, correlation
-def melt_corr_matrix(df_corr, factor):
-    """
-    df_corr is an indexed square matrix of correlations between rankings obtained from different combinations of
-        experimental factors
-    Assume that df_corr.columns is a MultiIndex [dataset, model, tuning, scoring].
-    Output a dataframe with schema (dataset, tuning, scoring, factor_1, factor_2, correlation)
-    The output dataframe includes all pairwise comparisons
-    """
-
-    factors = ["dataset", "model", "tuning", "scoring"]
-    try:
-        factors.remove(factor)
-    except ValueError:
-        raise ValueError(f"{factor} is not a valid experimental factor")
-
-    l = []
-    for idx, temp in df_corr.groupby(level=factors):
-        # cross section
-        t = temp.xs(idx, level=factors, axis=1)
-        # change names
-        t.index = t.index.rename({factor: f"{factor}_1"})
-        t.columns.name = f"{factor}_2"
-        # stack: indexed matrix -> dataframe
-        t = t.stack().reorder_levels(factors + [f"{factor}_1", f"{factor}_2"])
-        l.append(t)
-
-    return pd.concat(l, axis=0).rename("corr").to_frame().reset_index()
+plt.savefig(u.FIGURES_DIR / "heatmap_allfactors_['rho', 'agrbest'].pdf")
+plt.show()
 
 
-def compute_mat_corr(taub, agrbest, agrworst, factor):
-    """
-    Takes as input three indexed correlation matrices between combinations of experimental factors
-        Their columns are MultiIndex objects [dataset, model, tuning, scoring].
-    Outputs a dataframe with schema ({other_factor_1}, {other_factor_2}, {other_factor_3}, factor_1, factor_2, taub, agrbest, agrworst)
-        other_factor_n is the name of another factor in [dataset, model, tuning, scoring] which is not factor
-    The output dataframe includes all pairwise comparisons
-    """
+# %% 3a. Interpretation sensitivity - Get the aggregation functions (ru.Aggregator cannot support missing evaluations)
+df, rf = u.load_df_rf()
 
-    factors = ["dataset", "model", "tuning", "scoring"]
-    try:
-        factors.remove(factor)
-    except ValueError:
-        raise ValueError(f"{factor} is not a valid experimental factor")
-    factors.extend([f"{factor}_1", f"{factor}_2"])
-
-    mat_corr = reduce(
-        lambda l, r: l.merge(r, on=factors, how="inner"),
-        [melt_corr_matrix(taub, factor), melt_corr_matrix(agrbest, factor), melt_corr_matrix(agrworst, factor)])
-    mat_corr.columns = factors + ["taub", "agrbest", "agrworst"]
-
-    return mat_corr
-
-
-def plot_mat_corr(mat_corr, corr_metric, factor, color, folder, latex_name,
-                  show_plot=False, draw_points=True, ylim=None):
-    """
-    mat_corr has schema (dataset, tuning, scoring, factor_1, factor_2, taub, agrbest, agrworst),
-        each entry represents the correlation between the ranking produced with model1 and model2, with the rest fixed
-    """
-
-    sns.set_theme(style="whitegrid", font_scale=0.5)
-    sns.despine(trim=True, left=True)
-
-    # rename columns to their latex_name for pertty plotting
-    mat_corr = mat_corr.rename(columns=latex_name)
-    corr_metric_ = corr_metric
-    corr_metric = latex_name[corr_metric]
-
-    # IEEE column width = 3.25 inches; dpi is 300, 600 for black&white
-    grid = sns.FacetGrid(mat_corr, col=f"{factor}_2", row=f"{factor}_1",
-                         margin_titles=True, sharex="all", sharey="all",
-                         aspect=0.4, ylim=ylim)
-    grid.set_titles(row_template="{row_name}", col_template="{col_name}")
-
-    if draw_points:
-        grid.map_dataframe(sns.stripplot, y=corr_metric, color=color, size=1)
-    grid.map_dataframe(sns.boxplot, y=corr_metric, color=color, boxprops=dict(alpha=0.5), fliersize=0.5)
-
-    grid.fig.set_size_inches(3.25, 5)
-    grid.fig.tight_layout()
-    grid.savefig(folder / f"{factor}_stability_matrix_{corr_metric_}.svg", dpi=600)
-
-    if show_plot:
-        plt.show()
-
-
-folder = Path(u.RESULT_FOLDER).parent / "Stability"
-
-test = False
-factors = ["model", "tuning", "scoring"] if not test else ["tuning"]
-corr_metrics = ["taub", "agrbest", "agrworst"] if not test else ["taub"]
-
-for factor in factors:
-    taub, agrbest, agrworst = load_correlation_dataframes(Path(u.RESULT_FOLDER).parent / "Rankings")
-    mat_corr = compute_mat_corr(taub, agrbest, agrworst, factor)
-
-    for corr_metric in corr_metrics:
-        plot_mat_corr(mat_corr, corr_metric, factor, "black", folder, latex_name, show_plot=test, draw_points=False,
-                      ylim=(-1, 1) if corr_metric == "taub" else (0, 1))
-
-#%% 3a. Interpretation stability - Get the aggregation functions (ru.Aggregator cannot support missing evaluations)
-"""
-Aggregation strategies:
-    quality
-        mean, median, thrbest, rescaled mean, (ttest)
-    rank
-        mean, median, numbest, numworst, kemeny, nemenyi
-        
-Note that df is supposed to be alrady filtered for a specific model, scoring, and tuning. 
-!!! This can be changed in the future.        
-"""
-
-
-class BaseAggregator(object):
-    """
-    Aggregated scores (self.df) and/or rankings (self.rf) into a single ranking computed with an aggregation strategy
-    Accepted aggregation strategies are they keys of self.supported_strategies
-    The aggregation output is a dataframeof rankings, self.aggrf, with index the encoders and columns the aggregation
-        strategy
-    It is called BaseAggregator because it does not act on df nor rf, assuming they are ready to be aggregated
-    """
-
-    def __init__(self, df: pd.DataFrame, rf: pd.DataFrame):
-        self.df = df
-        self.rf = rf
-        self.aggrf = pd.DataFrame(index=rf.index)
-
-        self.supported_strategies = {
-            "mean rank": self._aggr_rank_mean,
-            "median rank": self._aggr_rank_median,
-            "numbest rank": self._aggr_rank_numbest,
-            "numworst rank": self._aggr_rank_numworst,
-            "kemeny rank": self._aggr_rank_kemeny,
-            "nemenyi rank": self._aggr_rank_nemenyi,
-            "mean quality": self._aggr_qual_mean,
-            "median quality": self._aggr_qual_median,
-            "thrbest quality": self._aggr_qual_thrbest,
-            "rescaled mean quality": self._aggr_qual_rescaled_mean,
-        }
-        # True if low = better (i.e., if it behaves like a rank function)
-        self.ascending = {
-            "rank_mean": True,
-            "rank_median": True,
-            "rank_numbest": False,
-            "rank_numworst": True,
-            "rank_kemeny": True,
-            "rank_nemenyi": True,
-            "qual_mean": False,
-            "qual_median": False,
-            "qual_thrbest": False,
-            "qual_rescaled_mean": False
-        }
-
-
-    def _aggr_rank_mean(self, **kwargs):
-        self.aggrf["rank_mean"] = self.rf.mean(axis=1)
-
-    def _aggr_rank_median(self, **kwargs):
-        self.aggrf["rank_median"] = self.rf.median(axis=1)
-
-    def _aggr_rank_numbest(self, **kwargs):
-        self.aggrf["rank_numbest"] = (self.rf == self.rf.min(axis=0)).sum(axis=1)
-
-    def _aggr_rank_numworst(self, **kwargs):
-        self.aggrf["rank_numworst"] = (self.rf == self.rf.max(axis=0)).sum(axis=1)
-
-    def _aggr_rank_kemeny(self, **solver_params):
-        self.aggrf["rank_kemeny"] = ru.kemeny_aggregation_gurobi_ties(self.rf.set_axis(range(self.rf.shape[1]), axis=1),
-                                                                      **solver_params)
-
-    def _aggr_rank_nemenyi(self, alpha=0.05):
-        """
-        Issues with no answer (yet):
-            is the test "good" when the rankings involved have different number of tiers?
-            does it support missing values?
-            transitivity is not guaranteed, however, it seems to be always transitive
-
-        Compute the outranking (domination) matrix and the matrix of significant differences according to Nemenyi pw tests,
-        then multiply them together to get the significative differences matrix, and rebuild a rank function from it
-        """
-        self.aggrf["rank_nemenyi"] = ru.mat2rf(ru.rf2mat(ru.score2rf(self.rf.mean(axis=1)), kind="domination") *
-                                               (posthoc_nemenyi_friedman(self.rf.T.reset_index(drop=True)) < alpha)
-                                               .astype(int).to_numpy(),
-                                               alternatives=self.rf.index)
-
-    def _aggr_qual_mean(self, **kwargs):
-        self.aggrf["qual_mean"] = self.df.groupby("encoder").cv_score.agg(np.nanmean)
-
-    def _aggr_qual_median(self, **kwargs):
-        self.aggrf["qual_median"] = self.df.groupby("encoder").cv_score.median(np.nanmedian)
-
-    def _aggr_qual_thrbest(self, thr=0.95, **kwargs):
-        """
-        Count the number of datasets on which an encoder achieves quality >= thr*best
-            best is the best performance on a dataset
-        """
-        self.aggrf["qual_thrbest"] = self.df.groupby(["dataset", "encoder"]).cv_score.mean().to_frame().reset_index()\
-                                            .join(df.groupby("dataset").cv_score.max(), on="dataset", rsuffix="_best")\
-                                            .query("cv_score >= @thr*cv_score_best").groupby("encoder").size()\
-                                            .reindex(self.rf.index).fillna(0)
-
-    def _aggr_qual_rescaled_mean(self, **kwargs):
-        """
-        iqr == 0 means that all encoders are equal on the dataset, i.e., we should ignore the comparison anyway
-        """
-        d1 = self.df.groupby(["dataset", "encoder"]).cv_score.mean().to_frame().reset_index()\
-                 .join(self.df.groupby(["dataset"]).cv_score.agg(np.nanmin), on="dataset", rsuffix="_worst")\
-                 .join(self.df.groupby(["dataset"]).cv_score.agg(iqr), on="dataset", rsuffix="_iqr")
-        d1["cv_score_rescaled"] = (d1["cv_score"] - d1["cv_score_worst"]) / d1["cv_score_iqr"]
-        self.aggrf["qual_rescaled_mean"] = d1.query("cv_score_iqr != 0").groupby("encoder").cv_score_rescaled.mean()
-
-    def aggregate(self, strategies: Union[set, list, str] = "all", ignore_strategies=tuple(), **kwargs):
-
-        if strategies == "all":
-            strategies = self.supported_strategies.keys()
-        for strategy in set(strategies) - set(ignore_strategies):
-            self.supported_strategies[strategy](**kwargs)
-
-        # Transform the scores into rankings
-        for col in self.aggrf:
-            self.aggrf[col] = ru.score2rf(self.aggrf[col], ascending=self.ascending[col])
-
-
-class Aggregator(object):
-    """
-    Aggregator that subsets the columns of df and rf to select model, tuning, and scoring
-        As default behaviour, loops over all combinations
-    For each combination, it aggregates scores (self.df) and/or rankings (self.rf) into
-        a ranking computed with an aggregation strategy
-    Accepted aggregation strategies are they keys of self.supported_strategies
-    The aggregation output is a dataframeof rankings, self.aggrf, with index the encoders and columns the aggregation
-        strategy
-
-    df is the dataframe of experimental evaluations and has schema:
-        'encoder', 'dataset', 'fold', 'model', 'tuning', 'scoring', 'cv_score', 'tuning_score', 'time',
-        'model__max_depth', 'model__n_neighbors', 'model__n_estimators', 'model__C', 'model__gamma'
-    rf is the dataframe of rank functions (obtained from instance by getting the average cv_score and then ranking) and
-        has schema:
-        index = encoders
-        columns = all combinations of dataset, model, tuning, scoring
-    """
-
-    def __init__(self, df: pd.DataFrame, rf: pd.DataFrame):
-        self.df = df
-        self.rf = rf
-
-        self.combinations = self.df.groupby(["model", "tuning", "scoring"]).size().index
-        self.base_aggregators = {(m, t, s): BaseAggregator(df.query("model == @m and tuning == @t and scoring == @s"),
-                                                          rf.loc(axis=1)[:, m, t, s])
-                                 for m, t, s in self.combinations}
-        self.aggrf = pd.DataFrame(index=rf.index)
-
-
-    def aggregate(self, strategies: Union[list, set, str] = "all", ignore_strategies: Union[tuple, list] = tuple(),
-                  verbose: bool = False, **kwargs):
-        comb_iter = tqdm(list(self.combinations)) if verbose else self.combinations
-        for model, tuning, scoring in comb_iter:
-            a = self.base_aggregators[(model, tuning, scoring)]
-            a.aggregate(strategies, ignore_strategies=ignore_strategies, **kwargs)
-            a.aggrf.columns = pd.MultiIndex.from_product([[model], [tuning], [scoring], a.aggrf.columns])
-
-        self.aggrf = pd.concat([a.aggrf for a in self.base_aggregators.values()], axis=1)
-
-        return self
-
-
-rankings_folder = Path(u.RESULT_FOLDER).parent / "Rankings"
-df = pd.read_csv(Path(u.RESULT_FOLDER, "final.csv"))
-rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv",
-                 index_col=0, header=[0, 1, 2, 3])
 # 45 minutes for all strategies (Kemeny is the bottleneck)
+"""
+!!! Gurobi is failing because 'model is too large'. It did not do this before though.
+"""
 run = False
 if run:
-    a = Aggregator(df, rf)
-    a.aggregate(verbose=True)
-    a.aggrf.to_csv(rankings_folder / "aggregated_ranks_from_average_cv_score.csv")
+    a = ru.Aggregator(df, rf)
+    a.aggregate(verbose=True, ignore_strategies=["nemenyi rank", "kemeny rank"])
+    a.to_csv(u.RANKINGS_DIR / "tmp" / "aggregated_ranks_from_average_cv_score_no_nemenyi_no_kemeny.csv")
 
-#%% 3b. Get and store correlation between aggregated rankings
+# --- Kemeny aggregation is the bottleneck aggregation
+run_kemeny = False
+if run_kemeny:
+    a = ru.Aggregator(df, rf)
+    a.aggregate(verbose=True, strategies=["kemeny rank"])
+    a.to_csv(u.RANKINGS_DIR / "tmp" / "aggregated_ranks_from_average_cv_score_kemeny.csv")
 
+# --- Test multiple alphas, then concatenate everything together
+run_nemenyi = False
+if run_nemenyi:
+    for alpha in [0.01, 0.05, 0.1]:
+        a = ru.Aggregator(df, rf)
+        a.aggregate(verbose=True, strategies=["nemenyi rank"], alpha=alpha)
+        a.to_csv(u.RANKINGS_DIR / "tmp" / f"aggregate_ranks_from_average_cv_score_nemenyi_{alpha}.csv")
 
+concatenate = False
+if concatenate:
+    aggrf = pd.read_csv(u.RANKINGS_DIR / "tmp" / "aggregated_ranks_from_average_cv_score_no_nemenyi_no_kemeny.csv", index_col=0,
+                        header=[0, 1, 2, 3])
+    agg_nemenyi = [aggrf]
+    for alpha in [0.01, 0.05, 0.1]:
+        agg_nemenyi.append(
+            pd.read_csv(u.RANKINGS_DIR / "tmp" / f"aggregate_ranks_from_average_cv_score_nemenyi_{alpha}.csv",
+                        index_col=0, header=[0, 1, 2, 3]))
+    agg_kemeny = [
+        pd.read_csv(u.RANKINGS_DIR / "tmp" / f"aggregated_ranks_from_average_cv_score_kemeny.csv",
+                    index_col=0, header=[0, 1, 2, 3])
+    ]
 
-def square_correlation_matrix(aggrf, shared_levels, corr_function):
-    """
-    Corr function is assumed to be symmetric and 1 if the inputs coincide
-    """
+    aggrf = pd.concat(agg_nemenyi + agg_kemeny, axis=1)
+    aggrf.to_csv(u.RANKINGS_DIR / "aggregated_ranks_from_average_cv_score.csv")
 
-    factor_combinations = aggrf.columns.sort_values()
+# %% 3b. Get and store correlation between aggregated rankings
+aggrf = u.load_aggrf().rename(columns=u.AGGREGATION_NAMES, level="interpretation")
+agg_taub, agg_ptaub, agg_rho, agg_agrbest, agg_agrworst = u.pairwise_similarity_wide_format(aggrf,
+                                                                                            simfuncs=[ru.kendall_tau,
+                                                                                                      ru.kendall_tau_p,
+                                                                                                      ru.spearman_rho,
+                                                                                                      ru.agreement_best,
+                                                                                                      ru.agreement_worst],
+                                                                                            shared_levels=slice(-1))
 
-    out = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
-    for (i1, col1), (i2, col2) in product(enumerate(factor_combinations), repeat=2):
-        if i1 >= i2:
-            continue
-        # compare only if they have equal model, tuning, scoring
-        if col1[shared_levels] != col2[shared_levels]:
-            continue
-        out.loc[col1, col2] = corr_function(aggrf[col1], aggrf[col2])
+agg_taub.to_csv(u.RANKINGS_DIR / "pw_AGG_kendall_tau_b_nan=omit.csv")
+agg_ptaub.to_csv(u.RANKINGS_DIR / "pw_AGG_kendall_tau_b_p_nan=omit.csv")
+agg_rho.to_csv(u.RANKINGS_DIR / "pw_AGG_spearman_rho_nan=omit.csv")
+agg_agrbest.to_csv(u.RANKINGS_DIR / "pw_AGG_agrbest.csv")
+agg_agrworst.to_csv(u.RANKINGS_DIR / "pw_AGG_agrworst.csv")
 
-    # Make symmetric, add diagonal
-    out = out.fillna(out.T)
-    for i in range(len(out)):
-        out.iloc[i, i] = 1.0
+# %% !!! 3c. Aggregation sensitivity plots - OUTDATED
 
-    return out
+reload(u)
 
+aggsims = u.load_agg_similarities()
+agg_taub = aggsims["pw_AGG_kendall_tau_b_nan=omit.csv"]
+agg_ptaub = aggsims["pw_AGG_kendall_tau_b_p_nan=omit.csv"]
+agg_rho = aggsims["pw_AGG_spearman_rho_nan=omit.csv"]
+agg_agrbest = aggsims["pw_AGG_agrbest.csv"]
+agg_agrworst = aggsims["pw_AGG_agrworst.csv"]
 
-def compute_sqms_analysis(aggrf, shared_levels):
+df_sim = u.join_wide2long({"taub": agg_taub, "ptaub": agg_ptaub, "rho": agg_rho, "agrbest": agg_agrbest,
+                           "agrworst": agg_agrworst}, comparison_level="interpretation")
 
-    compact_names = {
-        "rank_mean": "RM",
-        "rank_median": "RMd",
-        "rank_numbest": "RB",
-        "rank_num_worst": "RW",
-        "rank_numworst": "RW",
-        "rank_kemeny": "RK",
-        "rank_nemenyi": "RN",
-        "qual_mean": "QM",
-        "qual_median": "QMd",
-        "qual_thrbest": "QT",
-        "qual_rescaled_mean": "QR"
-    }
+similarities = ["rho", "agrbest"]
+for similarity in similarities:
+    u.plot_long_format_similarity_dataframe(df_sim.round(1), similarity, comparison_level="interpretation",
+                                            plot_type="heatmap",
+                                            color="black", figsize_inches=(3, 3), fontsize=8, annot_fontsize=7,
+                                            save_plot=False, show_plot=True, draw_points=False)
 
-    agg_taub = square_correlation_matrix(aggrf, shared_levels,
-                                         lambda x, y: kendalltau(x, y, variant="b", nan_policy="omit")[0])\
-        .rename(index=compact_names, columns=compact_names)
-    agg_agrbest = square_correlation_matrix(aggrf, shared_levels,
-                                            lambda x, y: ru.agreement(x, y, best=True))\
-        .rename(index=compact_names, columns=compact_names)
-    agg_agrworst = square_correlation_matrix(aggrf, shared_levels,
-                                             lambda x, y: ru.agreement(x, y, best=False))\
-        .rename(index=compact_names, columns=compact_names)
+# %% 3d. Aggregation sensitivity plots - two measures in the same heatmap
 
-    return agg_taub, agg_agrbest, agg_agrworst
+reload(u)
 
+aggsims = u.load_agg_similarities()
+agg_taub = aggsims["pw_AGG_kendall_tau_b_nan=omit.csv"]
+agg_ptaub = aggsims["pw_AGG_kendall_tau_b_p_nan=omit.csv"]
+agg_rho = aggsims["pw_AGG_spearman_rho_nan=omit.csv"]
+agg_agrbest = aggsims["pw_AGG_agrbest.csv"]
+agg_agrworst = aggsims["pw_AGG_agrworst.csv"]
 
-def compute_correlation_matrix(aggrf, shared_levels):
-    """"
-    common_levels are the column levels that have to be equal in order to compute the correlation between two cols
-    """
+df_sim = u.join_wide2long({"taub": agg_taub, "ptaub": agg_ptaub, "rho": agg_rho, "agrbest": agg_agrbest,
+                           "agrworst": agg_agrworst}, comparison_level="interpretation")
 
-    factor_combinations = aggrf.columns.sort_values()
+fig, ax = plt.subplots(1, 1, figsize=(3, 3))
+u.heatmap_longformat_multisim(df_sim, ["rho", "agrbest"], "interpretation", fontsize=8, annot_fontsize=8,
+                              save_plot=True, show_plot=True, ax=ax, summary_statistic="mean")
 
-    # For every pair of columns, compute: taub, agreement on best, agreement on worst
-    agg_taub = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
-    agg_agrbest = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
-    agg_agrworst = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
-    for (i1, col1), (i2, col2) in list(product(enumerate(aggrf.columns), repeat=2)):
-        if i1 >= i2:
-            continue
-        # compare the aggregated rankings only if they have equal model, tuning, scoring
-        if col1[shared_levels] != col2[shared_levels]:
-            continue
-        agg_taub.loc[col1, col2] = kendalltau(aggrf[col1], aggrf[col2], variant="b", nan_policy="omit")[0]
-        agg_agrbest.loc[col1, col2] = ru.agreement(aggrf[col1], aggrf[col2], best=True)
-        agg_agrworst.loc[col1, col2] = ru.agreement(aggrf[col1], aggrf[col2], best=False)
+# %% 3d2. Test for median_similarity --- removable
+comparison_level="scoring"; cl = [f"{comparison_level}_1", f"{comparison_level}_2"]; similarity = "rho"
+median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
+    .pivot(index=cl[0], columns=cl[1]) \
+    .droplevel([0], axis=1)\
+    .rename(index=u.FACTOR_LATEX[comparison_level], columns=u.FACTOR_LATEX[comparison_level])
 
-    # They are symmetric
-    agg_taub = agg_taub.fillna(agg_taub.T)
-    agg_agrbest = agg_agrbest.fillna(agg_agrbest.T)
-    agg_agrworst = agg_agrworst.fillna(agg_agrworst.T)
-
-    for i in range(len(agg_taub)):
-        agg_taub.iloc[i, i] = 1
-        agg_agrbest.iloc[i, i] = 1
-        agg_agrworst.iloc[i, i] = 1
-
-    # compact names
-    new_names = {
-        "rank_mean": "RM",
-        "rank_median": "RMd",
-        "rank_numbest": "RB",
-        "rank_num_worst": "RW",
-        "rank_numworst": "RW",
-        "rank_kemeny": "RK",
-        "rank_nemenyi": "RN",
-        "qual_mean": "QM",
-        "qual_median": "QMd",
-        "qual_thrbest": "QT",
-        "qual_rescaled_mean": "QR"
-    }
-
-    agg_taub = agg_taub.rename(index=new_names, columns=new_names)
-    agg_agrbest = agg_agrbest.rename(index=new_names, columns=new_names)
-    agg_agrworst = agg_agrworst.rename(index=new_names, columns=new_names)
-
-    return agg_taub, agg_agrbest, agg_agrworst
+tmp = median_similarity.to_numpy()
+np.fill_diagonal(tmp, 0)
+tmp = pd.DataFrame(tmp, index=median_similarity.index, columns=median_similarity.columns)
 
 
-aggrf = pd.read_csv(rankings_folder / "aggregated_ranks_from_average_cv_score.csv", index_col=0, header=[0, 1, 2, 3])
-agg_taub, agg_agrbest, agg_agrworst = compute_sqms_analysis(aggrf, shared_levels=slice(-1))
 
-agg_taub.to_csv(rankings_folder / "pw_AGG_kendall_tau_b_nan=omit.csv")
-agg_agrbest.to_csv(rankings_folder / "pw_AGG_agrbest.csv")
-agg_agrworst.to_csv(rankings_folder / "pw_AGG_agrworst.csv")
-#%% 3c. Interpretation stability boxplot
-
-
-def load_correlation_dataframes_interpretation(folder):
-    # load (indexed) matrices of rank correlations
-    agg_taub = pd.read_csv(folder / "pw_AGG_kendall_tau_b_nan=omit.csv", index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
-    agg_agrbest = pd.read_csv(folder / "pw_AGG_agrbest.csv", index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
-    agg_agrworst = pd.read_csv(folder / "pw_AGG_agrworst.csv", index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
-
-    # fix: the dataset ID is not read as string
-    agg_taub.index = agg_taub.index.set_levels(agg_taub.index.levels[0].astype(str), level=0)
-    agg_agrbest.index = agg_agrbest.index.set_levels(agg_agrbest.index.levels[0].astype(str), level=0)
-    agg_agrworst.index = agg_agrworst.index.set_levels(agg_agrworst.index.levels[0].astype(str), level=0)
-
-    # rename the index and column levels
-    factors = ["model", "tuning", "scoring", "strategy"]
-
-    for idx in [agg_taub.index, agg_taub.columns, agg_agrbest.index, agg_agrbest.columns, agg_agrworst.index,
-                agg_agrworst.columns]:
-        idx.rename(factors, inplace=True)
-
-    return agg_taub, agg_agrbest, agg_agrworst
-
-
-def melt_corr_matrix_interpretation(df_corr, factor):
-    """
-    df_corr is an indexed square matrix of correlations between rankings obtained from different combinations of
-        experimental factors
-    Assume that df_corr.columns is a MultiIndex [model, tuning, scoring, strategy].
-    Output a dataframe with schema (model, tuning, scoring, strategy_1, strategy_2, correlation)
-    The output dataframe includes all pairwise comparisons
-    """
-
-    factors = ["model", "tuning", "scoring", "strategy"]
-    try:
-        factors.remove(factor)
-    except ValueError:
-        raise ValueError(f"{factor} is not a valid experimental factor")
-
-    l = []
-    for idx, temp in df_corr.groupby(level=factors):
-        # cross section
-        t = temp.xs(idx, level=factors, axis=1)
-        # change names
-        t.index = t.index.rename({factor: f"{factor}_1"})
-        t.columns.name = f"{factor}_2"
-        # stack: indexed matrix -> dataframe
-        t = t.stack().reorder_levels(factors + [f"{factor}_1", f"{factor}_2"])
-        l.append(t)
-
-    return pd.concat(l, axis=0).rename("corr").to_frame().reset_index()
-
-
-def compute_mat_corr_interpretation(agg_taub, agg_agrbest, agg_agrworst, factor):
-    """
-    Takes as input three indexed correlation matrices between combinations of experimental factors
-        Their columns are MultiIndex objects [dataset, model, tuning, scoring].
-    Outputs a dataframe with schema ({other_factor_1}, {other_factor_2}, {other_factor_3}, factor_1, factor_2, taub, agrbest, agrworst)
-        other_factor_n is the name of another factor in [dataset, model, tuning, scoring] which is not factor
-    The output dataframe includes all pairwise comparisons
-    """
-
-    factors = ["model", "tuning", "scoring", "strategy"]
-    try:
-        factors.remove(factor)
-    except ValueError:
-        raise ValueError(f"{factor} is not a valid experimental factor")
-    factors.extend([f"{factor}_1", f"{factor}_2"])
-
-    mat_corr = reduce(
-        lambda l, r: l.merge(r, on=factors, how="inner"),
-        [melt_corr_matrix_interpretation(agg_taub, factor),
-         melt_corr_matrix_interpretation(agg_agrbest, factor),
-         melt_corr_matrix_interpretation(agg_agrworst, factor)])
-    mat_corr.columns = factors + ["taub", "agrbest", "agrworst"]
-
-    return mat_corr
-
-
-folder = Path(u.RESULT_FOLDER).parent / "Stability"
-factor = "strategy"
-agg_taub, agg_agrbest, agg_agrworst = load_correlation_dataframes_interpretation(Path(u.RESULT_FOLDER).parent / "Rankings")
-mat_corr = compute_mat_corr_interpretation(agg_taub, agg_agrbest, agg_agrworst, factor)
-
-test = False
-corr_metrics = ["taub", "agrbest", "agrworst"] if not test else ["taub"]
-
-for corr_metric in corr_metrics:
-    plot_mat_corr(mat_corr, corr_metric, factor, "black", folder, latex_name, show_plot=test, draw_points=False,
-                  ylim=(-1, 1) if corr_metric == "taub" else (0, 1))
-
-print("Done")
-
-#%% 4a. Stability in number of datasets - Compute
+# %% 4a. Sensitivity on number of datasets - Compute
 """
-For all interpretation strategies except Kemeny, which takes way too long. 
+For all aggregation strategies except Kemeny, which takes way too long. 
 For a given sample size, draw two non-overlapping samples of datasest and compute the correlation between the 
     aggregated rankings. 
-Repeat (to get deviation)
-!!! no tuning is still missing LGBM results (classified as full tuning)
 """
 
+df, rf = u.load_df_rf()
 
-@contextlib.contextmanager
-def temp_seed(seed):
-    state = np.random.get_state()
-    np.random.seed(seed)
-    try:
-        yield
-    finally:
-        np.random.set_state(state)
+tuning = "no"
+df_ = df.query("tuning == @tuning")
+rf_ = rf.loc(axis=1)[:, :, tuning, :].copy()
 
-
-def sample_non_overlapping(S, n_samples, sample_size, seed=0):
-    if n_samples * sample_size > len(S):
-        raise ValueError("Not enough elements in S.")
-    S_ = set(S)
-    with temp_seed(seed):
-        out = []
-        for _ in range(n_samples):
-            Snew = set(np.random.choice(list(S_), sample_size, replace=False))
-            out.append(Snew)
-            S_ = S_ - Snew
-    return out
-
-
-def melt_corr_matrix_sample(df_corr, factor):
-    """
-    df_corr is an indexed square matrix of correlations between rankings obtained from different combinations of
-        experimental factors
-    Assume that df_corr.columns is a MultiIndex [model, tuning, scoring, strategy].
-    Output a dataframe with schema (model, tuning, scoring, strategy_1, strategy_2, correlation)
-    The output dataframe includes all pairwise comparisons
-    """
-
-    factors = ["sample", "model", "tuning", "scoring", "strategy"]
-    try:
-        factors.remove(factor)
-    except ValueError:
-        raise ValueError(f"{factor} is not a valid experimental factor")
-
-    l = []
-    for idx, temp in df_corr.groupby(level=factors):
-        # cross section
-        t = temp.xs(idx, level=factors, axis=1)
-        # change names
-        t.index = t.index.rename({factor: f"{factor}_1"})
-        t.columns.name = f"{factor}_2"
-        # stack: indexed matrix -> dataframe
-        t = t.stack().reorder_levels(factors + [f"{factor}_1", f"{factor}_2"])
-        l.append(t)
-
-    return pd.concat(l, axis=0).rename("corr").to_frame().reset_index()
-
-
-def compute_mat_corr_sample(sample_taub, sample_agrbest, sample_agrworst, factor):
-    """
-    Takes as input three indexed correlation matrices between combinations of experimental factors
-        Their columns are MultiIndex objects [dataset, model, tuning, scoring].
-    Outputs a dataframe with schema ({other_factor_1}, {other_factor_2}, {other_factor_3}, factor_1, factor_2, taub, agrbest, agrworst)
-        other_factor_n is the name of another factor in [dataset, model, tuning, scoring] which is not factor
-    The output dataframe includes all pairwise comparisons
-    """
-
-    factors = ["sample", "model", "tuning", "scoring", "strategy"]
-    try:
-        factors.remove(factor)
-    except ValueError:
-        raise ValueError(f"{factor} is not a valid experimental factor")
-    factors.extend([f"{factor}_1", f"{factor}_2"])
-
-    mat_corr = reduce(
-        lambda l, r: l.merge(r, on=factors, how="inner"),
-        [melt_corr_matrix_sample(sample_taub, factor),
-         melt_corr_matrix_sample(sample_agrbest, factor),
-         melt_corr_matrix_sample(sample_agrworst, factor)])
-    mat_corr.columns = factors + ["taub", "agrbest", "agrworst"]
-
-    return mat_corr
-
-
-class SampleAggregator(object):
-
-    def __init__(self, df, rf, sample_size, seed=0):
-        """
-        df and rf are already restricted to values corresponding to no tuning
-
-        """
-
-        self.sample_size = sample_size
-        self.seed = seed
-
-        self.df = df.query("tuning == 'no'")
-        self.rf = rf.loc(axis=1)[:, :, "no", :]
-
-        self.a1 = None  # Aggregator
-        self.a2 = None  # Aggregator
-
-        self.aggrf = pd.DataFrame()  # Aggregated rankings
-
-        self.datasets_sample_1, self.datasets_sample_2 = sample_non_overlapping(self.df.dataset.unique(), n_samples=2,
-                                                                                sample_size=self.sample_size,
-                                                                                seed=self.seed)
-        self.df1 = self.df.query("dataset in @self.datasets_sample_1")
-        self.df2 = self.df.query("dataset in @self.datasets_sample_2")
-        self.rf1 = self.rf.loc(axis=1)[[str(x) for x in self.datasets_sample_1], :, :, :]
-        self.rf2 = self.rf.loc(axis=1)[[str(x) for x in self.datasets_sample_2], :, :, :]
-
-    def aggregate(self, verbose=False, strategies: Union[list, str, set] = "all",
-                  ignore_strategies: Union[list, tuple] = tuple(), **kwargs):
-
-        self.a1 = Aggregator(self.df1, self.rf1).aggregate(strategies=strategies,
-                                                           ignore_strategies=ignore_strategies, verbose=verbose,
-                                                           **kwargs)
-        self.a2 = Aggregator(self.df2, self.rf2).aggregate(strategies=strategies,
-                                                           ignore_strategies=ignore_strategies, verbose=verbose,
-                                                           **kwargs)
-
-        factors = ["sample", "model", "tuning", "scoring", "strategy"]
-        self.aggrf = pd.concat([pd.concat({str(self.datasets_sample_1): self.a1.aggrf}, names=factors, axis=1),
-                               pd.concat({str(self.datasets_sample_2): self.a2.aggrf}, names=factors, axis=1)],
-                               axis=1)
-
-        return self
-
-
-rankings_folder = Path(u.RESULT_FOLDER).parent / "Rankings"
-df = pd.read_csv(Path(u.RESULT_FOLDER, "final.csv"))
-rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv", index_col=0, header=[0, 1, 2, 3])
-
-# As we want to use all 50 datasets, filter for tuning
-df_ = df.query("tuning == 'no'")
-rf_ = rf.loc(axis=1)[:, :, "no", :]
-factors = ["sample", "model", "tuning", "scoring", "strategy"]
-
-global_mat_corr = pd.read_csv(rankings_folder / "pw_corr_SAMPLE_with_strategy_std.csv")
-run = False
+sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
+run = True
 if run:
     # whenever we add experiments, start from the value of seed
-    seed = len(global_mat_corr)
-    sample_sizes = [5, 10, 15, 20, 25]
+    seed = len(sample_df_sim)
+    sample_sizes = [50]
     repetitions = 20
     mat_corrs = []
     sample_aggregators = defaultdict(lambda: [])
@@ -953,57 +551,45 @@ if run:
         inner_sample_aggregators = []
         for _ in tqdm(range(repetitions)):
             seed += 1
+            a = ru.SampleAggregator(df_, rf_, sample_size, seed=seed, bootstrap=True).aggregate(ignore_strategies=["kemeny rank"],
+                                                                                                verbose=False)
 
-            a = SampleAggregator(df, rf, sample_size, seed=seed).aggregate(ignore_strategies=["kemeny rank"],
-                                                                           verbose=False)
+            tmp_taub, tmp_agrbest, tmp_agrworst, tmp_rho = u.pairwise_similarity_wide_format(a.aggrf,
+                                                                                             simfuncs=[ru.kendall_tau,
+                                                                                                       ru.agreement_best,
+                                                                                                       ru.agreement_worst,
+                                                                                                       ru.spearman_rho])
+            agg_sample_long = u.join_wide2long(dict(zip(["taub", "agrbest", "agrworst", "rho"],
+                                                        [tmp_taub, tmp_agrbest, tmp_agrworst, tmp_rho])),
+                                               comparison_level="sample")
 
-            mc = compute_mat_corr_sample(*compute_sqms_analysis(a.aggrf, shared_levels=slice(1, None)),
-                                         factor="sample")
-
-            inner_mat_corrs.append(mc.assign(sample_size=sample_size).query("sample_1 < sample_2"))
+            inner_mat_corrs.append(agg_sample_long.assign(sample_size=sample_size).query("sample_1 < sample_2"))
             sample_aggregators[sample_size].append(a)
         mat_corrs.append(pd.concat(inner_mat_corrs, axis=0))
     # if mat_corr is already defined, make it bigger! We are adding experiments
     mat_corr = pd.concat(mat_corrs, axis=0)
-    mat_corr = mat_corr.join(mat_corr.groupby(["strategy", "sample_size"])[["taub", "agrbest", "agrworst"]].std(),
-                             on=["strategy", "sample_size"], rsuffix="_std")
-    global_mat_corr = pd.concat([global_mat_corr, mat_corr], axis=0)
+    mat_corr = mat_corr.join(
+        mat_corr.groupby(["interpretation", "sample_size"])[["taub", "agrbest", "agrworst", "rho"]].std(),
+        on=["interpretation", "sample_size"], rsuffix="_std")
+    sample_df_sim = pd.concat([sample_df_sim, mat_corr], axis=0)
 
-global_mat_corr.to_csv(rankings_folder / "pw_corr_SAMPLE_with_strategy_std.csv", index=False)
+# rename to AGGREGATION_NAMES but allow correctly formatted names
+sample_df_sim.interpretation = sample_df_sim.interpretation.map(lambda x: defaultdict(lambda: x, u.AGGREGATION_NAMES)[x])
+# sample_df_sim.to_csv(u.RANKINGS_DIR / f"sample_sim_{tuning}.csv", index=False)
 
-#%% 4b. Stability in number of datasets - Plots
+# %% 4a1. Sensitivity on number of datasets - Plots
+reload(u)
 
-mat_corr = pd.read_csv(rankings_folder / "pw_corr_SAMPLE_with_strategy_std.csv")
-folder = Path(u.RESULT_FOLDER).parent / "Stability"
+# sample_df_sim = u.load_sample_similarity_dataframe(tuning="model")
 
-strategy_palette = {
-    "QM": "#ff0000",
-    "QMd": "#d40909",
-    "QR": "#af0d0d",
-    "QT": "#8e0a0a",
-    "RB": "#0096ff",
-    "RM": "#0a79c7",
-    "RMd": "#0e5e96",
-    "RW": "#114467",
-    "RN": "#00303c",
-    "RK": None
-}
+u.lineplot_longformat_sample_sim(sample_df_sim, similarity="rho", save_plot=False, show_plot=True,
+                                 hue="model",
+                                 # errorbar=lambda x: (x.mean()-x.std()/10, x.mean()+x.std()/10),
+                                 estimator="mean",
+                                 )
 
-corr_metric = "agrbest"
 
-fig, ax = plt.subplots(1, 1, sharey="all")
-
-sns.barplot(mat_corr, x="sample_size", y=corr_metric, hue="strategy", palette=strategy_palette, ax=ax)
-sns.move_legend(ax, loc="upper right", bbox_to_anchor=(1.4, 1))
-ax.set_ylabel(latex_name[corr_metric])
-
-sns.despine(top=True, trim=True)
-
-fig.set_size_inches(7.25, 5)
-fig.tight_layout()
-fig.savefig(folder / f"dataset_sample_stability_{corr_metric}.svg", dpi=600)
-
-#%% 5. Most sensitive datasets - datasets with high performance difference (OUTDATED - NOT IN FULL PAPER)
+# %% !!! 5. Most sensitive datasets - datasets with high performance difference (OUTDATED - NOT IN FULL PAPER)
 """
 High-variability datasets are those for which the number of times the iqr (on e, fixed d, m, s) of encoder performances 
     is greater than the median (on datasets) of such iqrs + the iqr of iqrs, and this has to happen at least 
@@ -1016,15 +602,8 @@ So:
 !!! NO LGBM YET
 """
 
-
-def sorted_boxplot(data, x, y, **kwargs):
-    sns.boxplot(data, x=x, y=y,
-                order=index_sorted_by_median(data, groupby_col="encoder", target_col="rank"),
-                **kwargs)
-
-
-rankings_folder = Path(u.RESULT_FOLDER).parent / "Rankings"
-df = pd.read_csv(Path(u.RESULT_FOLDER, "final.csv"))
+rankings_folder = Path(u.RESULTS_DIR).parent / "Rankings"
+df = pd.read_csv(Path(u.RESULTS_DIR, "final.csv"))
 rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv", index_col=0, header=[0, 1, 2, 3])
 
 factors = ["dataset", "model", "tuning", "scoring"]
@@ -1037,7 +616,7 @@ b = b.loc[b >= b.median()]  # 90 is half the combinations of fold-model-tuning-s
 # high-variability datasets
 rf_hv = rf[b.index.astype(str)]
 
-folder = Path(u.RESULT_FOLDER).parent / "Full results"
+folder = Path(u.RESULTS_DIR).parent / "Full results"
 
 sns.set_theme(style="whitegrid", font_scale=0.3)
 
@@ -1063,21 +642,19 @@ grid.savefig(folder / f"encoder_rank_boxplot_matrix_HV.svg", dpi=600)
 # plt.show()
 
 print("Done")
-#%% 6. Rank of encoders plots
+# %% 6a. Rank of encoders in grid
 
-folder = Path(u.RESULT_FOLDER).parent / "Full results"
+folder = u.FIGURES_DIR
 
-sns.set_theme(style="whitegrid", font_scale=0.3)
+rf_melt = rf.melt(ignore_index=False).reset_index()
+rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
 
-melt_rf = rf.melt(ignore_index=False).reset_index()
-melt_rf.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
-
-grid = sns.FacetGrid(melt_rf, col="scoring", row="model",
+grid = sns.FacetGrid(rf_melt, col="scoring", row="model",
                      margin_titles=True, sharey=False)
 
 grid.set_titles(row_template="{row_name}", col_template="{col_name}")
 
-grid.map_dataframe(sorted_boxplot, x="rank", y="encoder",
+grid.map_dataframe(u.sorted_boxplot_horizontal, x="rank", y="encoder",
                    palette="crest", showfliers=False, linewidth=0.2, showcaps=False,
                    medianprops=dict(color="red", linewidth=0.4))
 # grid.set_xticklabels(rotation=90)
@@ -1086,65 +663,299 @@ grid.despine(top=True, trim=True)
 
 grid.fig.set_size_inches(7.25, 10)
 grid.fig.tight_layout()
-grid.savefig(folder / f"encoder_rank_boxplot_matrix.svg", dpi=600)
+grid.savefig(folder / f"encoder_rank_boxplot_matrix.pdf", dpi=600)
 
 # plt.show()
 
 print("Done")
 
-#%% 6a. Plot for one model and scoring
+# %% 6b. Plot overall ranks
 
-latex_encoders = {enc: enc for enc in df.encoder.unique()}
-latex_encoders.update({
-    "BUCV10RGLMME": r"BUCV$_{10}$RGLMME",
-    "BUCV2RGLMME": r"BUCV$_{2}$RGLMME",
-    "BUCV5RGLMME": r"BUCV$_{5}$RGLMME",
-    "BUCV10TE": r"BUCV$_{10}$TE",
-    "BUCV2TE": r"BUCV$_{2}$TE",
-    "BUCV5TE": r"BUCV$_{5}$TE",
-    "CV10RGLMME": r"CV$_{10}$RGLMME",
-    "CV2RGLMME": r"CV$_{2}$RGLMME",
-    "CV5RGLMME": r"CV$_{5}$RGLMME",
-    "CV10TE": r"CV$_{10}$TE",
-    "CV2TE": r"CV$_{2}$TE",
-    "CV5TE": r"CV$_{5}$TE",
-    "DTEM10": r"D$_{10}$TE",
-    "DTEM2": r"D$_{2}$TE",
-    "DTEM5": r"D$_{5}$TE",
-    "ME01E": r"MEE$_{0.1}$",
-    "ME1E": r"MEE$_{1}$",
-    "ME10E": r"MEE$_{10}$",
-    "PBTE0001": r"PB$_{0.001}$TE",
-    "PBTE001": r"PB$_{0.01}$TE",
-    "PBTE01": r"PB$_{0.1}$TE"
-})
+reload(u)
 
+rf = u.load_rf()
+# rf = rf.loc(axis=1)[:, "DTC", "no", "AUC"]
+# rf = rf / rf.max(axis=0)
 
-folder = Path(u.RESULT_FOLDER).parent / "Full results"
+rf_melt = rf.melt(ignore_index=False).reset_index()
+rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
 
-sns.set_theme(style="whitegrid", font_scale=0.5)
+fig, ax = plt.subplots(1, 1, figsize=(5.5, 3))
+ax = u.sorted_boxplot_vertical(data=rf_melt, y="rank", x="encoder",
+                               palette=sns.light_palette("grey", n_colors=len(rf.index)), showfliers=False,
+                               linewidth=1, showcaps=False, medianprops=dict(color="red", linewidth=1),
+                               ax=ax)
+ax.set_xticklabels(
+    ax.get_xticklabels(),
+    rotation=90,
+    horizontalalignment='right',
+    fontweight='light',
+    fontsize=10
+)
+ax.set(xlabel=None)
 
-model = "LGBMC"
-scoring = "AUC"
+plt.tight_layout(pad=0.5)
+plt.savefig(u.FIGURES_DIR / "boxplot_rank_all_experiments.pdf", dpi=600)
+# plt.show()
 
-melt_rf = rf.melt(ignore_index=False).reset_index()
-melt_rf.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
-melt_rf = melt_rf.query("model == @model and scoring == @scoring")
-melt_rf.encoder = melt_rf.encoder.map(latex_encoders)
+# %% 6b1. Rank of encoders for fixed model
 
-fig, ax = plt.subplots(1, 1, figsize=(2.5, 3.25), dpi=600)
-sorted_boxplot(data=melt_rf, x="rank", y="encoder",
-               palette=sns.light_palette("grey", n_colors=melt_rf.encoder.nunique()),
-               showfliers=True, linewidth=1, showcaps=True,
-               medianprops=dict(color="red", linewidth=1), ax=ax)
+reload(u)
 
-fig.tight_layout()
-fig.savefig(folder / f"encoder_rank_{model}_{scoring}.svg", dpi=600)
+rf = u.load_rf()
 
-plt.close("all")
+model = "LR"
+rf = rf.loc(axis=1)[:, model, :, :]
+
+rf_melt = rf.melt(ignore_index=False).reset_index()
+rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
+
+fig, ax = plt.subplots(1, 1, figsize=(5.5, 3))
+ax = u.sorted_boxplot_vertical(data=rf_melt, y="rank", x="encoder",
+                               palette=sns.light_palette("grey", n_colors=len(rf.index)), showfliers=False,
+                               linewidth=1, showcaps=False, medianprops=dict(color="red", linewidth=1),
+                               ax=ax)
+ax.set_xticklabels(
+    ax.get_xticklabels(),
+    rotation=90,
+    horizontalalignment='right',
+    fontweight='light',
+    fontsize=10
+)
+ax.set(xlabel=None)
+
+plt.tight_layout(pad=0.5)
+plt.savefig(u.FIGURES_DIR / f"boxplot_rank_{model}.pdf", dpi=600)
 plt.show()
 
-#%% 7. Performance effect of tuning (EMPTY)
-pass
-#%% 8.
+
+# %% 6c. Significance of rank difference
+
+df, rf = u.load_df_rf()
+a = ru.BaseAggregator(df=df, rf=rf)
+# a.aggregate(strategies=["nemenyi rank"])
+
+baseline = "OHE"
+
+test = (posthoc_nemenyi_friedman(a.rf.T.reset_index(drop=True)) < 0.05).astype(int).to_numpy()
+test = pd.DataFrame(test, index=rf.index, columns=rf.index)
+print(test.loc[baseline].sort_values())
+
+# %% 6c1. Significance of rank difference for one model
+
+df, rf = u.load_df_rf()
+rf = rf.loc(axis=1)[:, "LR", :, :]
+
+a = ru.BaseAggregator(df=df, rf=rf)
+# a.aggregate(strategies=["nemenyi rank"])
+
+baseline = "OHE"
+
+test = (posthoc_nemenyi_friedman(a.rf.T.reset_index(drop=True)) < 0.05).astype(int).to_numpy()
+test = pd.DataFrame(test, index=rf.index, columns=rf.index)
+print(test.loc[baseline].sort_values())
+
+
+
+# %% 6d. Plot overall performance
+
+df = u.load_df()
+scoring = "AUC"
+df_auc = df.query("scoring == @scoring")
+
+fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+g = u.sorted_boxplot_horizontal(data=df_auc, x="cv_score", y="encoder",
+                                palette=sns.light_palette("grey", n_colors=df_auc.nunique()["encoder"]),
+                                showfliers=False, linewidth=1, showcaps=False,
+                                medianprops=dict(color="red", linewidth=1))
+plt.tight_layout()
+plt.savefig(u.FIGURES_DIR / "boxplot_quality_all_experiments.pdf")
+plt.show()
+
+# %% 6e Plot tuning effect
+
+df = u.load_df()
+
+pk = ["encoder", "dataset", "fold", "model", "tuning", "scoring"]
+pk.remove("fold")
+df_auc = df.groupby(pk).cv_score.mean().reset_index()
+
+df_full = df_auc.query("tuning == 'full'")
+df_model = df_auc.query("tuning == 'model'")
+df_no = df_auc.query("tuning == 'no'")
+
+pk.remove("tuning")
+
+df_full_no = pd.merge(df_full, df_no, on=pk, how="inner")[pk + ["cv_score_x", "cv_score_y"]]
+df_full_no["full_VS_no"] = df_full_no.cv_score_x - df_full_no.cv_score_y
+
+df_full_model = pd.merge(df_full, df_model, on=pk, how="inner")[pk + ["cv_score_x", "cv_score_y"]]
+df_full_model["full_VS_model"] = df_full_model.cv_score_x - df_full_model.cv_score_y
+
+df_model_no = pd.merge(df_model, df_no, on=pk, how="inner")[pk + ["cv_score_x", "cv_score_y"]]
+df_model_no["model_VS_no"] = df_model_no.cv_score_x - df_model_no.cv_score_y
+
+
+# factor = "model"
+# fig, axes = plt.subplots(1, 3, figsize=(10, 5), sharex=False, clear=True)
+# for ax, (comparison, df_) in zip(axes, zip(["full_VS_no", "full_VS_model", "model_VS_no"],
+#                                            [df_full_no, df_full_model, df_model_no])):
+#     sns.boxplot(data=df_, x=comparison, y=factor,
+#                 palette=sns.light_palette("grey", n_colors=df.nunique()[factor]),
+#                 showfliers=False, linewidth=1, showcaps=False,
+#                 medianprops=dict(color="red", linewidth=1),
+#                 ax=ax)
+#
+#     # ax.set_xlim((-0.05, 0.05))
+#     ax.set_xlabel(f"{scoring}_{comparison}")
+
+factors = ["model", "scoring"]
+df_model_no.rename(columns={"model_VS_no": f"gain"}, inplace=True)
+fig, axes = plt.subplots(1, len(factors), figsize=(5.5, 3))
+for factor, ax in zip(factors, axes):
+    sns.boxplot(data=df_model_no, x=f"gain", y=factor,
+                    palette=sns.light_palette("grey", n_colors=df.nunique()[factor]),
+                    showfliers=False, linewidth=1, showcaps=False,
+                    medianprops=dict(color="red", linewidth=1),
+                    ax=ax)
+
+
+    sns.despine()
+plt.tight_layout(pad=0.5)
+# plt.savefig(u.FIGURES_DIR / "boxplot_tuningeffect_model_no.pdf")
+plt.show()
+
+# %% 7. Discriminating power of aggregation strategies
+
+rankings_folder = Path(u.RESULTS_DIR).parent / "Rankings"
+aggrf = pd.read_csv(rankings_folder / "aggregated_ranks_from_average_cv_score.csv", index_col=0, header=[0, 1, 2, 3])
+
+agg_power = aggrf.max(axis=0).reset_index()
+agg_power.columns = ["model", "tuning", "scoring", "strategy", "power"]
+agg_power.power = (1 + agg_power.power) / len(aggrf.index)
+
+# compact names
+new_names = {
+    "rank_mean": "RM",
+    "rank_median": "RMd",
+    "rank_numbest": "RB",
+    "rank_num_worst": "RW",
+    "rank_numworst": "RW",
+    "rank_kemeny": "RK",
+    "rank_nemenyi": "RN",
+    "rank_nemenyi_0.01": "RN01",
+    "rank_nemenyi_0.05": "RN05",
+    "rank_nemenyi_0.10": "RN10",
+    "qual_mean": "QM",
+    "qual_median": "QMd",
+    "qual_thrbest_0.95": "QT",
+    "qual_rescaled_mean": "QR"
+}
+strategy_palette = {
+    "QM": "#ff0000",
+    "QMd": "#d40909",
+    "QR": "#af0d0d",
+    "QT": "#8e0a0a",
+    "RB": "#0096ff",
+    "RM": "#0a79c7",
+    "RMd": "#0e5e96",
+    "RW": "#114467",
+    "RN": "#00303c",
+    "RN01": "#00303c",
+    "RN05": "#00303c",
+    "RN10": "#00303c",
+    "RK": "#ef0115"
+}
+
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "times new roman",
+})
+
+sns.set_theme(style="whitegrid", font_scale=0.5)
+sns.despine(trim=True, left=True)
+sns.set(font_scale=1)
+
+agg_power.strategy = agg_power.strategy.map(new_names)
+
+
+def index_sorted_reversed_by_median_then_max(df, groupby_col, target_col):
+    return df.groupby(groupby_col)[target_col].agg(["median", "max"]) \
+        .sort_values(by=["median", "max"], ascending=False).index
+
+
+fig, ax = plt.subplots(1, 1)
+sns.boxplot(agg_power,
+            order=index_sorted_reversed_by_median_then_max(agg_power, groupby_col="strategy", target_col="power"),
+            x="strategy", y="power", palette=strategy_palette, ax=ax)
+ax.set_ylabel("fraction of tiers")
+
+fig.tight_layout()
+# fig.savefig(Path(r"C:\Users\federicom\Desktop\Retreat 2023\Poster") / "aggregation_strategy_power.svg")
+
+plt.show()
+# %% 8a. Comparison with Pargent (2022)
+"""
+Discrepancies: 
+
+Datasets:
+    MISSING click_prediction_small (41434): Pargent treates the id columns as categorical, but they are numerical in our version
+    ID open_payments: they: 41442, we: 42178
+    MISSING road-safety-drivers-sex (41447): this dataset does not exist. 
+        45038 has the same name, but it has a different number of entries and there are 3 binary features out of 32
+        
+Models:
+    MISSING Lasso regression (we have LogReg)
+    MISSING RF
+    REPLACE xgboost with LGBM (very similar)
+    REPLACE SVM + information gain filter for features WITH SVM
+    REPLACE 15NN with 5NN
+    
+Tunings:
+    They say they use limited tuning, but they only tune Lasso and tune SVM with model (?) tuning 
+    
+Aggregations: 
+    To get the rankings, they use: E1 > E2 if t-test rejects --- we use plain cross-validated average
+        reasons for our choice: 
+            1. t-tests' hypotheses will be rejected by random chance Demsar (2006) 
+            2. pairwise t-tests yield non-transitive rankings (that's why we are not doing it)
+    They use Kemeny - BUT: their implementation from Hornik (2007) uses the symmetric distance as distance
+        it might be equivalent to other distances adapted to tied rankings
+        it does not take into account partiality of the rankings (maybe they don't have this problem)
+        it yields a TOTAL ORDER, i.e., they CANNOT account for ties in the consensus
+    
+Other: 
+    High cardinality threshold
+    Imputation for missing levels - we have default -1
+"""
+
+
+PARGENT = {
+    "datasets_int": [42178, 981, 4135, 1590, 1114, 41162, 42738, 41224],
+    "datasets_str": [str(x) for x in [42178, 981, 4135, 1590, 1114, 41162, 42738, 41224]],
+    "models": ["LGBMC", "SVC", "KNC"],
+    "tunings": ["no"],
+    "scorings": ["AUC"],
+    "aggregations": ['kemeny rank']
+}
+
+df, rf = u.load_df_rf()
+
+df = df.query("dataset in @PARGENT['datasets_int'] "
+              "and model in @PARGENT['models'] "
+              "and tuning in @PARGENT['tunings']"
+              "and scoring in @PARGENT['scorings']")
+rf = rf.loc(axis=1)[PARGENT["datasets_str"], PARGENT["models"], PARGENT["tunings"], PARGENT["scorings"]]
+
+a = ru.Aggregator(df, rf)
+a.aggregate(strategies=PARGENT["aggregations"], verbose=True)
+
+
+
+
+
+
+
 

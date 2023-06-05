@@ -271,10 +271,10 @@ if __name__ == "__main__":
     experiment_name = "test" if not test else "___TEST___"
 
     if update_experiment:
-        result_folder = os.path.join(u.RESULT_FOLDER, experiment_name)
+        result_folder = os.path.join(u.RESULTS_DIR, experiment_name)
     else:
-        same_name_exps = glob(os.path.join(u.RESULT_FOLDER, f"{experiment_name}*"), recursive=False)
-        result_folder = os.path.join(u.RESULT_FOLDER, f"{experiment_name}_{len(same_name_exps)}")
+        same_name_exps = glob(os.path.join(u.RESULTS_DIR, f"{experiment_name}*"), recursive=False)
+        result_folder = os.path.join(u.RESULTS_DIR, f"{experiment_name}_{len(same_name_exps)}")
     try:
         os.mkdir(result_folder)
         os.mkdir(os.path.join(result_folder, "logs"))

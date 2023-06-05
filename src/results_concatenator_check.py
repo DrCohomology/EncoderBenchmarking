@@ -77,6 +77,8 @@ run_experiments = set(df.groupby("dataset encoder model scoring".split()).groups
 missing = experiments - run_experiments
 print("Missing runs: ", len(missing))
 
+print(df.model.unique())
+
 # check duplicates
 if len(df) != len(df.drop_duplicates()):
     print("Duplicates: ", len(df), len(df.drop_duplicates()))
@@ -99,7 +101,7 @@ for model in df.model.unique():
         print("Missing hpars: ", model, df.loc[df.model == model][hpar].isna().sum())
 
 df["tuning"] = "full"
-df.to_csv(os.path.join(u.RESULT_FOLDER, "main6_final.csv"), index=False)
+df.to_csv(os.path.join(u.RESULTS_DIR, "main6_final.csv"), index=False)
 
 #%% main8 results
 
@@ -175,7 +177,7 @@ if len(df) != len(df.drop_duplicates()):
 
 df = df.drop_duplicates()
 df["tuning"] = "no"
-df.to_csv(os.path.join(u.RESULT_FOLDER, "main8_final.csv"), index=False)
+df.to_csv(os.path.join(u.RESULTS_DIR, "main8_final.csv"), index=False)
 
 #%% main9 results
 
@@ -249,7 +251,7 @@ for model in df.model.unique():
 
 df = df.drop_duplicates()
 df["tuning"] = "model"
-df.to_csv(os.path.join(u.RESULT_FOLDER, "main9_final.csv"), index=False)
+df.to_csv(os.path.join(u.RESULTS_DIR, "main9_final.csv"), index=False)
 
 
 

@@ -8,10 +8,10 @@ from typing import Union
 """
 Usage:
 
-RESULT_FOLDER  # path to folder 
+RESULTS_DIR  # path to folder 
 
-rankings_folder = Path(RESULT_FOLDER).parent / "Rankings"
-df = pd.read_csv(Path(RESULT_FOLDER, "final.csv"))
+rankings_folder = Path(RESULTS_DIR).parent / "Rankings"
+df = pd.read_csv(Path(RESULTS_DIR, "final.csv"))
 rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv",
                  index_col=0, header=[0, 1, 2, 3])
 

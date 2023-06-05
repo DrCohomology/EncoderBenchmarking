@@ -55,7 +55,7 @@ def concatenate_results(experiment_name, force=False, clean=True, remove_outdate
 
     warnings.filterwarnings("ignore")
 
-    results_folder = os.path.join(u.RESULT_FOLDER, experiment_name)
+    results_folder = os.path.join(u.RESULTS_DIR, experiment_name)
     results_concatenated = os.path.join(results_folder, "_concatenated.csv")
     results_files = glob.glob(os.path.join(results_folder, '*.csv'))
 

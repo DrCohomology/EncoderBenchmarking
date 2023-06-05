@@ -55,7 +55,7 @@ if __name__ == "__main__":
         datasets.append(tmp)
 
     datasets = pd.DataFrame(datasets).sort_values("name")
-    datasets.to_csv(os.path.join(u.RESULT_FOLDER, "datasets_info.csv"), index=False)
+    datasets.to_csv(os.path.join(u.RESULTS_DIR, "datasets_info.csv"), index=False)
 
 
 

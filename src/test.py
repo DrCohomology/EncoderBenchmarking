@@ -9,6 +9,7 @@ import itertools
 import json
 import warnings
 
+import contextlib
 import matplotlib.pyplot as plt
 import numpy as np
 import openml
@@ -32,14 +33,16 @@ from itertools import product
 from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 from numba import njit
 from openml.datasets import edit_dataset, fork_dataset, get_dataset
+from pathlib import Path
 from rpy2.robjects.packages import importr
-from scipy.stats import chi2_contingency, spearmanr, kendalltau
+from scipy.stats import chi2_contingency, spearmanr, kendalltau, iqr
 import seaborn as sns
 from skopt import BayesSearchCV
 from skopt.space import Real, Categorical, Integer
 from statsmodels.genmod.bayes_mixed_glm import BinomialBayesMixedGLM as bgmm
 from tqdm import tqdm
 
+from scikit_posthocs import posthoc_nemenyi_friedman
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
@@ -64,6 +67,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier, plot_tree
+from typing import Union
 
 import src.encoders as e
 import src.utils as u
@@ -72,57 +76,1050 @@ reload(e)
 reload(u)
 reload(rc)
 
-#%% Label encoder VS Ordinal encoder
 
-be = e.BinaryEncoder()
+#%% Understand MHE
+
+d = 2
+encoder = e.MinHashEncoder(n_components=d, ngram_range=(2, 3))
 
 df = pd.DataFrame([
-    ("b", 0),
-    ("a", 1),
-    ("a", 0),
-    ("c", 1),
-    ("d", 0)
+    ("aaaaaaaaaaaac", 0),
+    ("aac", 0),
+    ("ac", 1),
 ], columns=["A", "y"])
+
+def ngrams(s, n):
+    return set(s[i:i+n] for i in range(len(s)-n+1))
+
+
+def jaccard(s1: set, s2: set):
+    return len(s1.intersection(s2)) / len(s1.union(s2))
+
+
 
 X = df.drop("y", axis=1)
 y = df.y
 
-xl = be.fit_transform(X)
+XE = pd.DataFrame(encoder.fit_transform(X, y))
+XE.columns = [f"A_{i}" for i in range(len(XE.columns))]
+
+MHsim = np.zeros((len(X.index), len(X.index)))
+Jsim = np.zeros((len(X.index), len(X.index)))
+for i in range(len(X.index)):
+    for j in range(len(X.index)):
+        MHsim[i, j] = np.sum(np.abs(XE.iloc[i] == XE.iloc[j])) / d
+        Jsim[i, j] = jaccard(ngrams(X.A.iloc[i], 2), ngrams(X.A.iloc[j], 2))
+
+print(MHsim)
+print(Jsim)
 
 
-
-#%% Sum encoder
+#%% Understand Contrast Encodersencoder
 from sklearn.linear_model import LinearRegression
-from category_encoders import SumEncoder, OneHotEncoder
+from category_encoders import SumEncoder, OneHotEncoder, BackwardDifferenceEncoder, HelmertEncoder,
 from scipy.stats import pearsonr as corr
 
 
 df = pd.DataFrame([
-    ("b", 0),
-    ("a", 1),
     ("a", 0),
+    ("b", 0),
     ("c", 1),
 ], columns=["A", "y"])
 
-se = SumEncoder()
-ohe = OneHotEncoder()
+
+encoders = {
+    "OHE": OneHotEncoder(),
+    "SE": SumEncoder(),
+    "BDE": BackwardDifferenceEncoder(),
+    "HE": HelmertEncoder()
+}
 lr = LinearRegression(fit_intercept=False)
 
 X = df.drop("y", axis=1)
 y = df.y
 
-XE = se.fit_transform(X)
-XE2 = ohe.fit_transform(X)
-lr.fit(XE, y)
-print(lr.coef_)
+coefs = {}
+XEs = {}
+for name, encoder in encoders.items():
+    XEs[name] = encoder.fit_transform(X, y)
+    lr.fit(XEs[name], y)
+    coefs[name] = np.round(lr.coef_, 2)
 
-lr2 = LinearRegression(fit_intercept=False)
-lr2.fit(XE2, y)
-print(lr2.coef_)
+coefs = pd.DataFrame(coefs).T
 
-# for col in XE2:
-#     print(corr(XE2[col], y))
 
+
+#%% HashingEncoder
+import pandas as pd
+import time
+from category_encoders import HashingEncoder
+import src.encoders as e
+import src.utils as u
+
+X = pd.DataFrame(["a", "b", "ca"], columns=["c1"])
+X2 = pd.DataFrame(["a", "b", "c"], columns=["c1"])
+y = pd.Series([0, 0, 1])
+
+times = {}
+enc_times = {}
+for encoder in [HashingEncoder(max_process=1), e.OrdinalEncoder(), e.OneHotEncoder()]:
+    start = time.time()
+    _ = encoder.fit_transform(X, y)
+    times[u.get_acronym(encoder.__str__(), underscore=False)] = time.time() - start
+
+    start = time.time()
+    _ = encoder.transform(X)
+    enc_times[u.get_acronym(encoder.__str__(), underscore=False)] = time.time() - start
+
+
+print(times)
+print(enc_times)
+
+
+#%% A1 - Generate correlated rankings
+
+"""
+Generate highly-correlated rankings
+Aggregate
+"""
+
+import src.rank_utils as ru
+
+np.random.seed(1444)
+
+def rankings(len_rankings=32, num_rankings=50, num_contexts=36, ties=False):
+    """
+    Each ranking is two swaps from the previous one.
+
+    1. Generate 'num_contexts' seed rankings of 32 elements
+    2. For each seed ranking, generate num_rankings-1 rankings that are highly correlated with the seed
+    """
+    pass
+
+len_rankings=32
+num_rankings=50
+num_contexts=36
+
+# rankings are horizontal lines
+qualities = np.zeros((num_rankings*num_contexts, len_rankings))
+qualities[0] = np.random.random(len_rankings) * 0.4 + 0.5
+
+
+for i, q in enumerate(qualities):
+    if i == 0:
+        continue
+    qualities[i] = qualities[0] + np.random.normal(0, 0.01, size=len_rankings)
+
+index = [f"E_{i}" for i in range(len_rankings)]
+columns = pd.MultiIndex.from_tuples(product(
+    [f"D_{i}" for i in range(num_rankings)],
+    [f"P1_{i}" for i in range(6)],
+    [f"P2_{i}" for i in range(3)],
+    [f"P3_{i}" for i in range(2)])
+)
+
+qualities = pd.DataFrame(qualities.round(2).T,
+                         columns=columns, index=index)
+
+df = qualities.melt(ignore_index=False).reset_index()
+df.columns = ["encoder", "dataset", "model", "tuning", "scoring", "cv_score"]
+
+rfd = {}
+for col in qualities:
+    rfd[col] = ru.score2rf(qualities[col], ascending=False)
+
+rf = pd.DataFrame(rfd)
+
+#%% A2 - Test correlation
+
+maximum = 10
+corrs = np.zeros((rf.shape[1], rf.shape[1]))
+for i1, c1 in tqdm(enumerate(rf)):
+    if i1 >= maximum:
+        break
+    for i2, c2 in enumerate(rf):
+        if i1 >= i2:
+            continue
+        corrs[i1, i2] = kendalltau(rf[c1], rf[c2])[0]
+
+plt.boxplot(corrs.flatten()[corrs.flatten() > 0])
+plt.show()
+
+#%% A3 - Aggregate
+
+class BaseAggregator(object):
+    """
+    Aggregated scores (self.df) and/or rankings (self.rf) into a single ranking computed with an aggregation strategy
+    Accepted aggregation strategies are they keys of self.supported_strategies
+    The aggregation output is a dataframeof rankings, self.aggrf, with index the encoders and columns the aggregation
+        strategy
+    It is called BaseAggregator because it does not act on df nor rf, assuming they are ready to be aggregated
+    """
+
+    def __init__(self, df: pd.DataFrame, rf: pd.DataFrame):
+        self.df = df
+        self.rf = rf
+        self.aggrf = pd.DataFrame(index=rf.index)
+
+        self.supported_strategies = {
+            "mean rank": self._aggr_rank_mean,
+            "median rank": self._aggr_rank_median,
+            "numbest rank": self._aggr_rank_numbest,
+            "numworst rank": self._aggr_rank_numworst,
+            "kemeny rank": self._aggr_rank_kemeny,
+            "nemenyi rank": self._aggr_rank_nemenyi,
+            "mean quality": self._aggr_qual_mean,
+            "median quality": self._aggr_qual_median,
+            "thrbest quality": self._aggr_qual_thrbest,
+            "rescaled mean quality": self._aggr_qual_rescaled_mean,
+        }
+        # True if low = better (i.e., if it behaves like a rank function)
+        self.ascending = {
+            "rank_mean": True,
+            "rank_median": True,
+            "rank_numbest": False,
+            "rank_numworst": True,
+            "rank_kemeny": True,
+            "rank_nemenyi_0.01": True,
+            "rank_nemenyi_0.05": True,
+            "rank_nemenyi_0.10": True,
+            "qual_mean": False,
+            "qual_median": False,
+            "qual_thrbest_0.95": False,
+            "qual_rescaled_mean": False
+        }
+
+
+    def _aggr_rank_mean(self, **kwargs):
+        self.aggrf["rank_mean"] = self.rf.mean(axis=1)
+
+    def _aggr_rank_median(self, **kwargs):
+        self.aggrf["rank_median"] = self.rf.median(axis=1)
+
+    def _aggr_rank_numbest(self, **kwargs):
+        self.aggrf["rank_numbest"] = (self.rf == self.rf.min(axis=0)).sum(axis=1)
+
+    def _aggr_rank_numworst(self, **kwargs):
+        self.aggrf["rank_numworst"] = (self.rf == self.rf.max(axis=0)).sum(axis=1)
+
+    def _aggr_rank_kemeny(self, **solver_params):
+        self.aggrf["rank_kemeny"] = ru.kemeny_aggregation_gurobi_ties(self.rf.set_axis(range(self.rf.shape[1]), axis=1),
+                                                                      **{k: v for k, v in solver_params.items()
+                                                                       if k in ["Seed", "Start"]})
+
+    def _aggr_rank_nemenyi(self, alpha=0.05):
+        """
+        Issues with no answer (yet):
+            is the test "good" when the rankings involved have different number of tiers?
+            does it support missing values?
+            transitivity is not guaranteed, however, it seems to be always transitive
+
+        Compute the outranking (domination) matrix and the matrix of significant differences according to Nemenyi pw tests,
+        then multiply them together to get the significative differences matrix, and rebuild a rank function from it
+        """
+        self.aggrf[f"rank_nemenyi_{alpha:.02f}"] = ru.mat2rf(
+            ru.rf2mat(ru.score2rf(self.rf.mean(axis=1)), kind="domination") *
+            (posthoc_nemenyi_friedman(self.rf.T.reset_index(drop=True)) < alpha).astype(int).to_numpy(),
+            alternatives=self.rf.index)
+
+    def _aggr_qual_mean(self, **kwargs):
+        self.aggrf["qual_mean"] = self.df.groupby("encoder").cv_score.agg(np.nanmean)
+
+    def _aggr_qual_median(self, **kwargs):
+        self.aggrf["qual_median"] = self.df.groupby("encoder").cv_score.median(np.nanmedian)
+
+    def _aggr_qual_thrbest(self, thr=0.95, **kwargs):
+        """
+        Count the number of datasets on which an encoder achieves quality >= thr*best
+            best is the best performance on a dataset
+        """
+        self.aggrf[f"qual_thrbest_{thr}"] = self.df.groupby(["dataset", "encoder"]).cv_score.mean().to_frame().reset_index()\
+                                            .join(df.groupby("dataset").cv_score.max(), on="dataset", rsuffix="_best")\
+                                            .query("cv_score >= @thr*cv_score_best").groupby("encoder").size()\
+                                            .reindex(self.rf.index).fillna(0)
+
+    def _aggr_qual_rescaled_mean(self, **kwargs):
+        """
+        iqr == 0 means that all encoders are equal on the dataset, i.e., we should ignore the comparison anyway
+        """
+        d1 = self.df.groupby(["dataset", "encoder"]).cv_score.mean().to_frame().reset_index()\
+                 .join(self.df.groupby(["dataset"]).cv_score.agg(np.nanmin), on="dataset", rsuffix="_worst")\
+                 .join(self.df.groupby(["dataset"]).cv_score.agg(iqr), on="dataset", rsuffix="_iqr")
+        d1["cv_score_rescaled"] = (d1["cv_score"] - d1["cv_score_worst"]) / d1["cv_score_iqr"]
+        self.aggrf["qual_rescaled_mean"] = d1.query("cv_score_iqr != 0").groupby("encoder").cv_score_rescaled.mean()
+
+    def aggregate(self, strategies: Union[set, list, str] = "all", ignore_strategies=tuple(), **kwargs):
+
+        if strategies == "all":
+            strategies = self.supported_strategies.keys()
+        for strategy in set(strategies) - set(ignore_strategies):
+            self.supported_strategies[strategy](**kwargs)
+
+        # Transform the scores into rankings
+        for col in self.aggrf:
+            self.aggrf[col] = ru.score2rf(self.aggrf[col], ascending=self.ascending[col])
+
+
+class Aggregator(object):
+    """
+    Aggregator that subsets the columns of df and rf to select model, tuning, and scoring
+        As default behaviour, loops over all combinations
+    For each combination, it aggregates scores (self.df) and/or rankings (self.rf) into
+        a ranking computed with an aggregation strategy
+    Accepted aggregation strategies are they keys of self.supported_strategies
+    The aggregation output is a dataframeof rankings, self.aggrf, with index the encoders and columns the aggregation
+        strategy
+
+    df is the dataframe of experimental evaluations and has schema:
+        'encoder', 'dataset', 'fold', 'model', 'tuning', 'scoring', 'cv_score', 'tuning_score', 'time',
+        'model__max_depth', 'model__n_neighbors', 'model__n_estimators', 'model__C', 'model__gamma'
+    rf is the dataframe of rank functions (obtained from instance by getting the average cv_score and then ranking) and
+        has schema:
+        index = encoders
+        columns = all combinations of dataset, model, tuning, scoring
+    """
+
+    def __init__(self, df: pd.DataFrame, rf: pd.DataFrame):
+        self.df = df
+        self.rf = rf
+
+        self.combinations = self.df.groupby(["model", "tuning", "scoring"]).size().index
+        self.base_aggregators = {(m, t, s): BaseAggregator(df.query("model == @m and tuning == @t and scoring == @s"),
+                                                           rf.loc(axis=1)[:, m, t, s])
+                                 for m, t, s in self.combinations}
+        self.aggrf = pd.DataFrame(index=rf.index)
+
+    def aggregate(self, strategies: Union[list, set, str] = "all", ignore_strategies: Union[tuple, list] = tuple(),
+                  verbose: bool = False, **kwargs):
+
+        comb_iter = tqdm(list(self.combinations)) if verbose else self.combinations
+        for model, tuning, scoring in comb_iter:
+            a = self.base_aggregators[(model, tuning, scoring)]
+            a.aggregate(strategies, ignore_strategies=ignore_strategies, **kwargs)
+            a.aggrf.columns = pd.MultiIndex.from_product([[model], [tuning], [scoring], a.aggrf.columns])
+
+        self.aggrf = pd.concat([a.aggrf for a in self.base_aggregators.values()], axis=1)
+
+        return self
+
+
+def square_correlation_matrix(aggrf, shared_levels, corr_function):
+    """
+    Corr function is assumed to be symmetric and 1 if the inputs coincide
+    """
+
+    factor_combinations = aggrf.columns.sort_values()
+
+    out = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
+    for (i1, col1), (i2, col2) in product(enumerate(factor_combinations), repeat=2):
+        if i1 >= i2:
+            continue
+        # compare only if they have equal model, tuning, scoring
+        if col1[shared_levels] != col2[shared_levels]:
+            continue
+        try:
+            out.loc[col1, col2] = corr_function(aggrf[col1], aggrf[col2])
+        except:
+            print(col1, col2)
+            raise Exception
+
+
+    # Make symmetric, add diagonal
+    out = out.fillna(out.T)
+    for i in range(len(out)):
+        out.iloc[i, i] = 1.0
+
+    return out
+
+
+def compute_sqms_analysis(aggrf, shared_levels):
+
+    compact_names = {
+        "rank_mean": "RM",
+        "rank_median": "RMd",
+        "rank_numbest": "RB",
+        "rank_num_worst": "RW",
+        "rank_numworst": "RW",
+        "rank_kemeny": "RK",
+        "rank_nemenyi": "RN",
+        "rank_nemenyi_0.01": "RN01",
+        "rank_nemenyi_0.05": "RN05",
+        "rank_nemenyi_0.10": "RN10",
+        "qual_mean": "QM",
+        "qual_median": "QMd",
+        "qual_thrbest_0.95": "QT95",
+        "qual_rescaled_mean": "QR"
+    }
+
+    agg_taub = square_correlation_matrix(aggrf, shared_levels,
+                                         lambda x, y: kendalltau(x, y, variant="b", nan_policy="omit")[0])\
+        .rename(index=compact_names, columns=compact_names)
+    agg_agrbest = square_correlation_matrix(aggrf, shared_levels,
+                                            lambda x, y: ru.agreement(x, y, best=True))\
+        .rename(index=compact_names, columns=compact_names)
+    agg_agrworst = square_correlation_matrix(aggrf, shared_levels,
+                                             lambda x, y: ru.agreement(x, y, best=False))\
+        .rename(index=compact_names, columns=compact_names)
+
+    return agg_taub, agg_agrbest, agg_agrworst
+
+
+def compute_correlation_matrix(aggrf, shared_levels):
+    """"
+    common_levels are the column levels that have to be equal in order to compute the correlation between two cols
+    """
+
+    factor_combinations = aggrf.columns.sort_values()
+
+    # For every pair of columns, compute: taub, agreement on best, agreement on worst
+    agg_taub = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
+    agg_agrbest = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
+    agg_agrworst = pd.DataFrame(index=factor_combinations, columns=factor_combinations)
+    for (i1, col1), (i2, col2) in list(product(enumerate(aggrf.columns), repeat=2)):
+        if i1 >= i2:
+            continue
+        # compare the aggregated rankings only if they have equal model, tuning, scoring
+        if col1[shared_levels] != col2[shared_levels]:
+            continue
+        agg_taub.loc[col1, col2] = kendalltau(aggrf[col1], aggrf[col2], variant="b", nan_policy="omit")[0]
+        agg_agrbest.loc[col1, col2] = ru.agreement(aggrf[col1], aggrf[col2], best=True)
+        agg_agrworst.loc[col1, col2] = ru.agreement(aggrf[col1], aggrf[col2], best=False)
+
+    # They are symmetric
+    agg_taub = agg_taub.fillna(agg_taub.T)
+    agg_agrbest = agg_agrbest.fillna(agg_agrbest.T)
+    agg_agrworst = agg_agrworst.fillna(agg_agrworst.T)
+
+    for i in range(len(agg_taub)):
+        agg_taub.iloc[i, i] = 1
+        agg_agrbest.iloc[i, i] = 1
+        agg_agrworst.iloc[i, i] = 1
+
+    # compact names
+    new_names = {
+        "rank_mean": "RM",
+        "rank_median": "RMd",
+        "rank_numbest": "RB",
+        "rank_num_worst": "RW",
+        "rank_numworst": "RW",
+        "rank_kemeny": "RK",
+        "rank_nemenyi": "RN",
+        "qual_mean": "QM",
+        "qual_median": "QMd",
+        "qual_thrbest": "QT",
+        "qual_rescaled_mean": "QR"
+    }
+
+    agg_taub = agg_taub.rename(index=new_names, columns=new_names)
+    agg_agrbest = agg_agrbest.rename(index=new_names, columns=new_names)
+    agg_agrworst = agg_agrworst.rename(index=new_names, columns=new_names)
+
+    return agg_taub, agg_agrbest, agg_agrworst
+
+
+def melt_corr_matrix_interpretation(df_corr, factor):
+    """
+    df_corr is an indexed square matrix of correlations between rankings obtained from different combinations of
+        experimental factors
+    Assume that df_corr.columns is a MultiIndex [model, tuning, scoring, strategy].
+    Output a dataframe with schema (model, tuning, scoring, strategy_1, strategy_2, correlation)
+    The output dataframe includes all pairwise comparisons
+    """
+
+    factors = ["model", "tuning", "scoring", "strategy"]
+    try:
+        factors.remove(factor)
+    except ValueError:
+        raise ValueError(f"{factor} is not a valid experimental factor")
+
+    l = []
+    for idx, temp in df_corr.groupby(level=factors):
+        # cross section
+        t = temp.xs(idx, level=factors, axis=1)
+        # change names
+        t.index = t.index.rename({factor: f"{factor}_1"})
+        t.columns.name = f"{factor}_2"
+        # stack: indexed matrix -> dataframe
+        t = t.stack().reorder_levels(factors + [f"{factor}_1", f"{factor}_2"])
+        l.append(t)
+
+    return pd.concat(l, axis=0).rename("corr").to_frame().reset_index()
+
+
+def compute_mat_corr_interpretation(agg_taub, agg_agrbest, agg_agrworst, factor):
+    """
+    Takes as input three indexed correlation matrices between combinations of experimental factors
+        Their columns are MultiIndex objects [dataset, model, tuning, scoring].
+    Outputs a dataframe with schema ({other_factor_1}, {other_factor_2}, {other_factor_3}, factor_1, factor_2, taub, agrbest, agrworst)
+        other_factor_n is the name of another factor in [dataset, model, tuning, scoring] which is not factor
+    The output dataframe includes all pairwise comparisons
+    """
+
+    factors = ["model", "tuning", "scoring", "strategy"]
+    try:
+        factors.remove(factor)
+    except ValueError:
+        raise ValueError(f"{factor} is not a valid experimental factor")
+    factors.extend([f"{factor}_1", f"{factor}_2"])
+
+    mat_corr = reduce(
+        lambda l, r: l.merge(r, on=factors, how="inner"),
+        [melt_corr_matrix_interpretation(agg_taub, factor),
+         melt_corr_matrix_interpretation(agg_agrbest, factor),
+         melt_corr_matrix_interpretation(agg_agrworst, factor)])
+    mat_corr.columns = factors + ["taub", "agrbest", "agrworst"]
+
+    return mat_corr
+
+
+# a = Aggregator(df, rf).aggregate(strategies="all", ignore_strategies=["kemeny rank"], verbose=True)
+
+agg_taub, agg_agrbest, agg_agrworst = compute_sqms_analysis(a.aggrf, shared_levels=slice(-1))
+
+agg_taub.index.rename(["model", "tuning", "scoring", "strategy"], inplace=True)
+agg_agrbest.index.rename(["model", "tuning", "scoring", "strategy"], inplace=True)
+agg_agrworst.index.rename(["model", "tuning", "scoring", "strategy"], inplace=True)
+
+agg_taub.columns.rename(["model", "tuning", "scoring", "strategy"], inplace=True)
+agg_agrbest.columns.rename(["model", "tuning", "scoring", "strategy"], inplace=True)
+agg_agrworst.columns.rename(["model", "tuning", "scoring", "strategy"], inplace=True)
+
+
+#%% A4 - Interpretation stability
+
+corr_metric = "taub"
+factor = "strategy"
+
+mat_corr = compute_mat_corr_interpretation(agg_taub, agg_agrbest, agg_agrworst, factor)
+
+mat_corr_median = mat_corr.drop(columns=["model", "tuning", "scoring"])\
+                          .groupby(["strategy_1", "strategy_2"]).agg([min, max, np.median])
+
+m1 = mat_corr_median.loc[:, corr_metric]
+median_corr = m1.reset_index().pivot(index="strategy_1", columns="strategy_2").loc[:, "median"]
+min_corr = m1.reset_index().pivot(index="strategy_1", columns="strategy_2").loc[:, "min"]
+max_corr = m1.reset_index().pivot(index="strategy_1", columns="strategy_2").loc[:, "max"]
+
+fig, ax = plt.subplots(1, 1)
+g = sns.heatmap(median_corr, annot=True, ax=ax)
+plt.xticks(rotation=45)
+
+fig.tight_layout()
+
+plt.show()
+
+#%% A5 - Dataset sample stability
+
+@contextlib.contextmanager
+def temp_seed(seed):
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
+
+
+def sample_non_overlapping(S, n_samples, sample_size, seed=0):
+    if n_samples * sample_size > len(S):
+        raise ValueError("Not enough elements in S.")
+    S_ = set(S)
+    with temp_seed(seed):
+        out = []
+        for _ in range(n_samples):
+            Snew = set(np.random.choice(list(S_), sample_size, replace=False))
+            out.append(Snew)
+            S_ = S_ - Snew
+    return out
+
+
+def melt_corr_matrix_sample(df_corr, factor):
+    """
+    df_corr is an indexed square matrix of correlations between rankings obtained from different combinations of
+        experimental factors
+    Assume that df_corr.columns is a MultiIndex [model, tuning, scoring, strategy].
+    Output a dataframe with schema (model, tuning, scoring, strategy_1, strategy_2, correlation)
+    The output dataframe includes all pairwise comparisons
+    """
+
+    factors = ["sample", "model", "tuning", "scoring", "strategy"]
+    try:
+        factors.remove(factor)
+    except ValueError:
+        raise ValueError(f"{factor} is not a valid experimental factor")
+
+    l = []
+    for idx, temp in df_corr.groupby(level=factors):
+        # cross section
+        t = temp.xs(idx, level=factors, axis=1)
+        # change names
+        t.index = t.index.rename({factor: f"{factor}_1"})
+        t.columns.name = f"{factor}_2"
+        # stack: indexed matrix -> dataframe
+        t = t.stack().reorder_levels(factors + [f"{factor}_1", f"{factor}_2"])
+        l.append(t)
+
+    return pd.concat(l, axis=0).rename("corr").to_frame().reset_index()
+
+
+def compute_mat_corr_sample(sample_taub, sample_agrbest, sample_agrworst, factor):
+    """
+    Takes as input three indexed correlation matrices between combinations of experimental factors
+        Their columns are MultiIndex objects [dataset, model, tuning, scoring].
+    Outputs a dataframe with schema ({other_factor_1}, {other_factor_2}, {other_factor_3}, factor_1, factor_2, taub, agrbest, agrworst)
+        other_factor_n is the name of another factor in [dataset, model, tuning, scoring] which is not factor
+    The output dataframe includes all pairwise comparisons
+    """
+
+    factors = ["sample", "model", "tuning", "scoring", "strategy"]
+    try:
+        factors.remove(factor)
+    except ValueError:
+        raise ValueError(f"{factor} is not a valid experimental factor")
+    factors.extend([f"{factor}_1", f"{factor}_2"])
+
+    mat_corr = reduce(
+        lambda l, r: l.merge(r, on=factors, how="inner"),
+        [melt_corr_matrix_sample(sample_taub, factor),
+         melt_corr_matrix_sample(sample_agrbest, factor),
+         melt_corr_matrix_sample(sample_agrworst, factor)])
+    mat_corr.columns = factors + ["taub", "agrbest", "agrworst"]
+
+    return mat_corr
+
+
+class SampleAggregator(object):
+
+    def __init__(self, df, rf, sample_size, seed=0):
+        """
+        df and rf are already restricted to values corresponding to no tuning
+
+        """
+
+        self.sample_size = sample_size
+        self.seed = seed
+
+        self.df = df
+        self.rf = rf
+
+        self.a1 = None  # Aggregator
+        self.a2 = None  # Aggregator
+
+        self.aggrf = pd.DataFrame()  # Aggregated rankings
+
+        self.datasets_sample_1, self.datasets_sample_2 = sample_non_overlapping(self.df.dataset.unique(), n_samples=2,
+                                                                                sample_size=self.sample_size,
+                                                                                seed=self.seed)
+        self.df1 = self.df.query("dataset in @self.datasets_sample_1")
+        self.df2 = self.df.query("dataset in @self.datasets_sample_2")
+        self.rf1 = self.rf.loc(axis=1)[[str(x) for x in self.datasets_sample_1], :, :, :]
+        self.rf2 = self.rf.loc(axis=1)[[str(x) for x in self.datasets_sample_2], :, :, :]
+
+    def aggregate(self, verbose=False, strategies: Union[list, str, set] = "all",
+                  ignore_strategies: Union[list, tuple] = tuple(), **kwargs):
+
+        self.a1 = Aggregator(self.df1, self.rf1).aggregate(strategies=strategies,
+                                                           ignore_strategies=ignore_strategies, verbose=verbose,
+                                                           **kwargs)
+        self.a2 = Aggregator(self.df2, self.rf2).aggregate(strategies=strategies,
+                                                           ignore_strategies=ignore_strategies, verbose=verbose,
+                                                           **kwargs)
+
+        factors = ["sample", "model", "tuning", "scoring", "strategy"]
+        self.aggrf = pd.concat([pd.concat({str(self.datasets_sample_1): self.a1.aggrf}, names=factors, axis=1),
+                               pd.concat({str(self.datasets_sample_2): self.a2.aggrf}, names=factors, axis=1)],
+                               axis=1)
+
+        return self
+
+
+rankings_folder = Path(u.RESULTS_DIR).parent / "test"
+
+factors = ["sample", "model", "tuning", "scoring", "strategy"]
+
+try:
+    global_mat_corr = pd.read_csv(rankings_folder / "pw_corr_SAMPLE_with_strategy_std.csv")
+except:
+    global_mat_corr = pd.DataFrame()
+
+run = False
+if run:
+    # whenever we add experiments, start from the value of seed
+    seed = len(global_mat_corr)
+    sample_sizes = [5, 10, 15, 20, 25]
+    repetitions = 20
+    mat_corrs = []
+    sample_aggregators = defaultdict(lambda: [])
+    for sample_size in tqdm(sample_sizes):
+        inner_mat_corrs = []
+        inner_sample_aggregators = []
+        for _ in tqdm(range(repetitions)):
+            seed += 1
+
+            a = SampleAggregator(df, rf, sample_size, seed=seed).aggregate(ignore_strategies=["kemeny rank"],
+                                                                           verbose=False)
+
+            mc = compute_mat_corr_sample(*compute_sqms_analysis(a.aggrf, shared_levels=slice(1, None)),
+                                         factor="sample")
+
+            inner_mat_corrs.append(mc.assign(sample_size=sample_size).query("sample_1 < sample_2"))
+            sample_aggregators[sample_size].append(a)
+        mat_corrs.append(pd.concat(inner_mat_corrs, axis=0))
+    # if mat_corr is already defined, make it bigger! We are adding experiments
+    mat_corr = pd.concat(mat_corrs, axis=0)
+    mat_corr = mat_corr.join(mat_corr.groupby(["strategy", "sample_size"])[["taub", "agrbest", "agrworst"]].std(),
+                             on=["strategy", "sample_size"], rsuffix="_std")
+    global_mat_corr = pd.concat([global_mat_corr, mat_corr], axis=0)
+
+global_mat_corr.to_csv(rankings_folder / "pw_corr_SAMPLE_with_strategy_std.csv", index=False)
+#%%
+sns.set_theme(style="whitegrid", font_scale=0.5)
+sns.despine(trim=True, left=True)
+sns.set(font_scale=1.3)
+
+rankings_folder = Path(u.RESULTS_DIR).parent / "test"
+
+mat_corr = pd.read_csv(rankings_folder / "pw_corr_SAMPLE_with_strategy_std.csv")
+# folder = Path(u.RESULTS_DIR).parent / "Stability"
+
+latex_name = {
+    "taub": r"$\tau_b$",
+    "taub_std": r"$\sigma(\tau_b)$",
+    "agrbest": r"$\alpha_{best}$",
+    "agrbest_std": r"$\sigma(\alpha_{best})$",
+    "agrworst": r"$\alpha_{worst}$",
+    "agrworst_std": r"$\sigma(\alpha_{worst})$",
+}
+
+strategy_palette = {
+    "QM": "#ff0000",
+    "QMd": "#d40909",
+    "QR": "#af0d0d",
+    "QT95": "#8e0a0a",
+    "RB": "#0096ff",
+    "RM": "#0a79c7",
+    "RMd": "#0e5e96",
+    "RW": "#114467",
+    "RN05": "#00303c",
+    "RK": None
+}
+
+corr_metric = "taub"
+
+fig, ax = plt.subplots(1, 1, sharey="all")
+
+sns.barplot(mat_corr, x="sample_size", y=corr_metric, hue="strategy", palette=strategy_palette, ax=ax,
+            errorbar=None, )
+sns.move_legend(ax, loc="upper right", bbox_to_anchor=(1.4, 1))
+ax.set_ylabel(latex_name[corr_metric])
+
+sns.despine(top=True, trim=True)
+fig.tight_layout()
+
+plt.show()
+
+
+#%% Coupla generation of correlated rankings - failed (I will try later to understand what is going on)
+
+
+
+# Kendall tau strength: http://polisci.usca.edu/apls301/Text/Chapter%2012.%20Significance%20and%20Measures%20of%20Association.htm
+# https://de.mathworks.com/help/stats/generate-correlated-data-using-rank-correlation.html
+# https://stackoverflow.com/questions/38598441/how-to-specify-a-priori-correlation-between-samples-drawn-randomly-from-two-mult
+from copulas.multivariate import GaussianMultivariate
+from scipy.stats import multivariate_normal, pearson3, pearsonr, spearmanr, kendalltau
+
+p1 = pearson3.rvs(loc=0, scale=1, skew=0, size=1000)
+p2 = pearson3.rvs(loc=1, scale=1, skew=0.6, size=1000)
+
+# plt.scatter(p1, p2)
+# plt.show()
+
+mu = 50
+sigma = 5
+rho = 0.99
+M = mu + sigma*np.random.random((1000, 2))
+R = np.array([[1, rho], [rho, 1]])
+L = np.linalg.cholesky(R)
+
+u = (M @ L).T
+
+# plt.scatter(u[0], u[1])
+# plt.show()
+print(pearsonr(u[0], u[1])[0])
+print(spearmanr(u[0], u[1])[0])
+print(kendalltau(u[0], u[1])[0])
+
+i1, u1 = np.array(sorted(enumerate(u[0]), key=lambda a: a[1])).T
+i2, u2 = np.array(sorted(enumerate(u[1]), key=lambda a: a[1])).T
+
+x1 = np.zeros_like(u1)
+x2 = np.zeros_like(u2)
+
+x1[i1.astype(int)] = sorted(p1)
+x2[i2.astype(int)] = sorted(p2)
+
+# plt.scatter(x1, x2)
+# plt.show()
+
+print(kendalltau(x1, x2)[0])
+
+
+#%% Test of different rank similarity metrics
+
+rankings_folder = Path(u.RESULTS_DIR).parent / "Rankings"
+
+rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv",
+                 index_col=0, header=[0, 1, 2, 3])
+
+
+def rw(r1, r2):
+    """From: A WEIGHTED RANK MEASURE OF CORRELATION (2005)"""
+    n = len(r1)
+
+    num = 6 * sum((
+        (xi-yi)**2 * ((n-xi+1) + (n-yi+1))
+        for xi, yi in zip(r1, r2)
+    ))
+    den = n**4 + n**3 - n**2 - n
+
+    return 1 - num/den
+
+
+def num_tied(r):
+    return 0.5 * sum(
+        np.sum(r == i) * (np.sum(r == i) - 1)
+        for i in set(r)
+    )
+
+
+def taub(r1, r2):
+    """Original Kendall formula."""
+
+    n = len(r1)                     # total number of alternatives
+    n0 = n * (n-1) / 2              # total number of pairs
+    n1 = num_tied(r1)               # tied pairs in r1
+    n2 = num_tied(r2)               # tied pairs in r2
+
+    # print(sum(
+    #     np.sign(r1[i]-r1[j]) * np.sign(r2[i]-r2[j])
+    #     for i, j in product(range(len(r1)), repeat=2)
+    #     if i < j
+    # ))
+
+    return sum(
+        np.sign(r1[i]-r1[j]) * np.sign(r2[i]-r2[j])
+        for i, j in product(range(len(r1)), repeat=2)
+        if i < j
+    ) / np.sqrt((n0 - n1) * (n0 - n2))
+
+
+def wtaub(r1, r2, w : callable):
+    """Mine, starting from original Kendall formulation.
+    Weight characteristics:
+        - symmetric
+        - tiers
+        - normalizes to [-1, 1]
+    Based on the interpretation of: n0 is not the number of pairs, but the weighted number of pairs.
+    Another very nice interpretation (possibly) is that the new wtaub is the probability of drawing a random pair
+        given the prob distribution given by the weights
+    """
+
+    w1 = w(r1)
+    w2 = w(r2)
+
+    # weights of pairs
+    W1 = np.outer(w1, w1)
+    W2 = np.outer(w2, w2)
+
+    # total weight for unique pairs in r1 and r2 (original: n0)
+    wtot1 = (np.sum(W1) - np.sum(np.diag(W1))) / 2.0
+    wtot2 = (np.sum(W2) - np.sum(np.diag(W2))) / 2.0
+
+    # tied pairs (mask to calculate the weight)
+    tied1 = np.sum([
+        np.outer(r1 == rank, r1 == rank)
+        for rank in set(r1)
+    ], axis=0)
+    tied2 = np.sum([
+        np.outer(r2 == rank, r2 == rank)
+        for rank in set(r2)
+    ], axis=0)
+
+    # weight of tied pairs in r1 and r2 (original: n1, n2)
+    wtied1 = (np.sum(W1 * tied1) - np.sum(np.diag(W1))) / 2
+    wtied2 = (np.sum(W2 * tied2) - np.sum(np.diag(W2))) / 2
+
+    # print(sum(w1), sum(w2))
+    # print(f"{wtot1:5.3f}, {wtied1:5.3f}, {wtot2:5.3f}, {wtied2:5.3f}")
+    # print(f"{np.sqrt((wtot1 - wtied1) * (wtot2 - wtied2)):3f}")
+
+    out = 0
+    for i in range(len(r1)):
+        for j in range(len(r1)):
+            if i >= j:
+                continue
+            out += w1[i] * w2[j] * np.sign(r1[i]-r1[j]) * np.sign(r2[i]-r2[j])
+
+    return out / np.sqrt((wtot1 - wtied1) * (wtot2 - wtied2))
+
+@njit
+def wtaub_poli(r1, r2, d, a):
+    """Mine, starting from original Kendall formulation.
+    Weight characteristics:
+        - symmetric
+        - tiers
+        - normalizes to [-1, 1]
+    Based on the interpretation of: n0 is not the number of pairs, but the weighted number of pairs.
+    Another very nice interpretation (possibly) is that the new wtaub is the probability of drawing a random pair
+        given the prob distribution given by the weights
+    """
+
+    w1 = np.divide(np.max(r1) - r1, np.max(r1 - np.min(r1))) ** d + a
+    w2 = np.divide(np.max(r2) - r2, np.max(r2 - np.min(r2))) ** d + a
+
+    # w1 = 1 / (a + np.exp(d * np.divide(np.max(r1) - r1, np.max(r1 - np.min(r1)))))
+    # w2 = 1 / (a + np.exp(d * np.divide(np.max(r2) - r2, np.max(r2 - np.min(r2)))))
+
+    # weights of pairs
+    W1 = np.outer(w1, w1)
+    W2 = np.outer(w2, w2)
+
+    # total weight for unique pairs in r1 and r2 (original: n0)
+    wtot1 = (np.sum(W1) - np.sum(np.diag(W1))) / 2.0
+    wtot2 = (np.sum(W2) - np.sum(np.diag(W2))) / 2.0
+
+    # tied pairs (mask to calculate the weight)
+    tied1 = np.zeros((len(r1), len(r1)))
+    for i in range(len(r1)):
+        for j in range(len(r1)):
+            if r1[i] == r1[j]:
+                tied1[i, j] = 1
+
+    tied2 = np.zeros((len(r2), len(r2)))
+    for i in range(len(r2)):
+        for j in range(len(r2)):
+            if r2[i] == r2[j]:
+                tied2[i, j] = 1
+
+    # weight of tied pairs in r1 and r2 (original: n1, n2)
+    wtied1 = (np.sum(W1 * tied1) - np.sum(np.diag(W1))) / 2
+    wtied2 = (np.sum(W2 * tied2) - np.sum(np.diag(W2))) / 2
+
+    # print(wtot1, wtied1, wtot2, wtied2)
+
+    out = 0
+    for i in range(len(r1)):
+        for j in range(len(r1)):
+            if i >= j:
+                continue
+            out += w1[i] * w2[j] * np.sign(r1[i] - r1[j]) * np.sign(r2[i] - r2[j])
+
+    return out / np.sqrt((wtot1 - wtied1) * (wtot2 - wtied2)), np.linalg.norm(w1), np.linalg.norm(w2), \
+           np.sqrt((wtot1 - wtied1) * (wtot2 - wtied2)), np.max(w1)/np.min(w1), np.max(w2)/np.min(w2)
+
+@njit
+def w_poli(r, d): return np.divide(np.max(r) - r), np.max(r - np.min(r))**d
+
+
+r1, r2 = rf.iloc[:, 20].to_numpy(), rf.iloc[:, 15].to_numpy()
+# r1 = np.array((1, 1, 0, 1, 2, 2, 3, 3, 3, 3))
+# r2 = np.array((0, 1, 1, 1, 2, 0, 2, 0, 2, 3))
+
+def init_zeros(m, n, num):
+    return [np.zeros((m, n)) for _ in range(num)]
+
+alphas = np.linspace(0.01, 2, 500)
+exponents = np.linspace(0, 2, 500)
+wtaubs, w1s, w2s, dens, ratio1, ratio2 = init_zeros(len(alphas), len(exponents), 6)
+
+for (ia, a) in enumerate(alphas):
+    for (id, d) in enumerate(exponents):
+        try:
+            wtaubs[ia, id], w1s[ia, id], w2s[ia, id], dens[ia, id], ratio1[ia, id], ratio2[ia, id] = wtaub_poli(r1, r2, d, a)
+        except ZeroDivisionError:
+            wtaubs[ia, id], w1s[ia, id], w2s[ia, id], dens[ia, id], ratio1[ia, id], ratio2[ia, id] = [-1]*6
+
+def get_color(dim, cmap="jet"):
+    return plt.cm.ScalarMappable(norm=mpl.colors.Normalize(dim.min(), dim.max()), cmap=cmap).to_rgba(dim)
+
+X, Y = np.meshgrid(alphas, exponents)
+
+fig = plt.figure(figsize=(12, 10))
+
+ax = fig.add_subplot(2, 2, 1, projection="3d")
+ax.set_title("Weighted similarity")
+ax.plot_surface(X, Y, wtaubs, facecolors=get_color(wtaubs))
+ax.set_xlabel("a")
+ax.set_ylabel("d")
+# ax.view_init(90, -90)
+
+ax = fig.add_subplot(2, 2, 2, projection="3d")
+ax.set_title("Denominator")
+ax.plot_surface(X, Y, dens, facecolors=get_color(dens))
+ax.set_xlabel("a")
+ax.set_ylabel("d")
+
+ax = fig.add_subplot(2, 2, 3, projection="3d")
+ax.set_title("Weight ratio 1")
+ax.plot_surface(X, Y, w1s, facecolors=get_color(w1s))
+ax.set_xlabel("a")
+ax.set_ylabel("d")
+
+ax = fig.add_subplot(2, 2, 4, projection="3d")
+ax.set_title("Weight ratio 2")
+ax.plot_surface(X, Y, w2s, facecolors=get_color(w2s))
+ax.set_xlabel("a")
+ax.set_ylabel("d")
+
+
+plt.tight_layout()
+plt.show()
+
+
+
+#%% Helicoid
+
+# plt.rcParams.update({
+#     "text.usetex": True,
+#     "font.family": "times new roman",
+#     "font.size": 8,
+# })
+
+theta = np.linspace(0, 2*np.pi, 300)
+rho = np.linspace(-1, 1, 300)
+
+plane = np.array(list(itertools.product(rho, theta)))
+
+x = [r * np.cos(t) for r, t in plane]
+y = [r * np.sin(t) for r, t in plane]
+z = [t for _, t in plane]
+
+fig = plt.figure(figsize=(4, 4))
+ax = fig.add_subplot(1, 1, 1, projection="3d")
+ax.scatter(x, y, z, c=z, cmap="rainbow")
+
+# ax.set_xlabel(r"$\rho cos(\theta)$")
+# ax.set_ylabel(r"$\rho sin(\theta)$")
+# ax.set_zlabel(r"$\theta$")
+
+ax.set_xticks([])
+ax.set_yticks([])
+ax.set_zticks([])
+
+plt.tight_layout()
+plt.show()
+
+fig = plt.figure(figsize=(3, 1))
+ax = fig.add_subplot(1, 1, 1)
+ax.scatter(plane[:, 0], plane[:, 1], c=plane[:, 0], cmap="rainbow")
+# ax.set_xlabel(r"$\theta$")
+# ax.set_ylabel(r"$\rho$")
+ax.set_xticks([])
+ax.set_yticks([])
+
+plt.tight_layout()
+plt.show()
 
 #%%
 
@@ -208,7 +1205,7 @@ def d_kendall3(r1, r2):
 #%% not sure what this is
 np.random.seed(10)
 
-df = pd.read_csv(u.RESULT_FOLDER + "\\main6_final.csv")
+df = pd.read_csv(u.RESULTS_DIR + "\\main6_final.csv")
 
 dataset = "adult"
 model1 = "DecisionTreeClassifier"
@@ -224,7 +1221,7 @@ rank11 = get_rank(df, dataset, model1, scoring1)
 rank12 = get_rank(df, dataset, model1, scoring2)
 rank21 = get_rank(df, dataset, model2, scoring1)
 
-df2 = pd.read_csv(u.RESULT_FOLDER + "\\main8_final.csv")
+df2 = pd.read_csv(u.RESULTS_DIR + "\\main8_final.csv")
 rank112 = get_rank(df2, dataset, model1, scoring1)
 
 ranks = [rank11, rank12, rank21]
@@ -502,7 +1499,7 @@ for encoder in tqdm(encoders):
 #%%
 
 # load df_concatenated
-result_folder = os.path.join(u.RESULT_FOLDER, "big_benchmark_backup")
+result_folder = os.path.join(u.RESULTS_DIR, "big_benchmark_backup")
 df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
 
 

@@ -43,7 +43,7 @@ def pack2server():
         subs = [
             (r"from src\.", "from "),
             (r"import src\.", "import "),
-            (r'RESULT_FOLDER = "C:/Data/EncoderBenchmarking_results/ExperimentalResults"', 'RESULT_FOLDER = "./results"'),
+            (r'RESULTS_DIR = "C:/Data/EncoderBenchmarking_results/ExperimentalResults"', 'RESULTS_DIR = "./results"'),
             (r'experiment_name = "test" if not test else "___TEST___"', f'experiment_name = "{experiment_dir}"'),
             (r"test = True", "test = False"),
         ]

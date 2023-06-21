@@ -185,7 +185,7 @@ buglmm = [e.CVBlowUp(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 
 bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
 binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
-me = [e.MEstimate(m=m) for m in [1e-1, 1, 10]]
+me = [e.MeanEstimateEncoder(m=m) for m in [1e-1, 1, 10]]
 encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte, me])
 models = [
     u.DecisionTreeClassifier(random_state=random_state+2, max_depth=5),

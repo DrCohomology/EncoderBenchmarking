@@ -4,6 +4,8 @@ Result analysis, structured as in the paper
 """
 
 import contextlib
+import json
+import glob
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,12 +28,9 @@ import src.results_concatenator as rc
 import src.rank_utils as ru
 
 # Setup plotting with LaTeX
-sns.set_theme(style="whitegrid", font_scale=1)
-sns.despine(trim=True, left=True)
-plt.rcParams.update({
-    "text.usetex": True,
-    "font.family": "times new roman",
-})
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
 
 # %% 0a. Define all experiments
 rlibs = None
@@ -43,7 +42,7 @@ buglmm = [e.CVBlowUp(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 
 bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
 dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
 binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
-ste = [e.MEstimate(m=m) for m in [1e-1, 1, 10]]
+ste = [e.MeanEstimateEncoder(m=m) for m in [1e-1, 1, 10]]
 encoders = reduce(lambda x, y: x + y, [std, cvglmm, cvte, buglmm, bute, dte, binte, ste])
 encoders = set(u.get_acronym(str(x), underscore=False) for x in encoders)
 
@@ -104,14 +103,12 @@ df.to_csv(Path(u.RESULTS_DIR, "final.csv"), index=False)
 
 # %% 1a. Missing evaluations analysis
 
+pk = ["encoder", "dataset", "fold", "model", "tuning", "scoring"]
+pk_exp = ["encoder", "dataset", "model", "tuning", "scoring"]
+
 exp_completed = set(df.groupby(pk_exp).groups)
 
 missing = pd.DataFrame(list(exp_total - exp_completed), columns=pk_exp).sort_values(pk_exp).reset_index(drop=True)
-"""
-There is an extra run for f1 score
-"""
-# a = df.groupby(["encoder", "dataset", "model", "tuning"]).size()
-# print(f"Extra f1 run for \n {a.loc[a!=15]}")
 
 # --- Analysis of missing evaluations
 missing_fraction = {}
@@ -119,6 +116,23 @@ for col in missing.columns:
     miss = missing.groupby(col).size()
     total = df.groupby(col).size() / 5 + miss  # remove folds
     missing_fraction[col] = pd.concat([miss, total], axis=1).fillna(0).sort_values(0).astype(int)
+
+# %% 1a2. Open the logs
+
+errors = []
+for log in tqdm(glob.glob(f"{u.RESULTS_DIR}/**/**/*.json", recursive=True)):
+    if Path(log).name.startswith("1"):
+        continue
+    with open(log, "r") as fr:
+        errors.append(json.load(fr))
+errors = pd.DataFrame(errors)
+
+# %% 1a3. Analyze the error logs
+errors = errors.loc[~ errors.duplicated()]
+
+
+
+
 
 # %% 1b. Different rankings -> Different evaluations
 
@@ -147,7 +161,7 @@ plt.show()
 
 # weird examples with 1 in variation
 # df.query("dataset == 43922 and model == 'SVC' and tuning == 'full' and scoring == 'F1'").groupby("encoder").cv_score.mean()
-
+ pass
 
 # %% 2a. Store rank functions
 
@@ -172,8 +186,8 @@ if run:
 
     rf.columns.name = ("dataset", "model", "tuning", "scoring")
     rf.to_csv(u.RANKINGS_DIR / "rank_function_from_average_cv_score.csv")
-    cv_score.to_csv(Path(rankings_folder, "average_cv_score.csv"))
-    cv_score_std.to_csv(Path(rankings_folder, "std_cv_score.csv"))
+    cv_score.to_csv(Path(u.RANKINGS_DIR, "average_cv_score.csv"))
+    cv_score_std.to_csv(Path(u.RANKINGS_DIR, "std_cv_score.csv"))
 
 # %% 2b. Compute and store correlation metrics
 """
@@ -245,7 +259,7 @@ ptaub_scoring = u.pairwise_similarity_wide_format(rf,
 ptaub = reduce(lambda x, y: x.fillna(y), [ptaub_model, ptaub_scoring, ptaub_tuning])
 ptaub.to_csv(u.RANKINGS_DIR / "pw_kendall_tau_b_p_nan=omit.csv")
 
-# %% !!! 2c. Factor sensitivity
+# %% 2c. Plot factor sensitivity - factors together
 """
 Model sensitivity is the change in ranking when everything is fixed but the model
 Approach 1: for every DTS, compute average (on M) correlation (excluding self-correlation and nans). 
@@ -254,12 +268,14 @@ Approach 1: for every DTS, compute average (on M) correlation (excluding self-co
         (for instance, we are able to see if one dataset has consistent rankings of encoders for different models)
         This second level of grouping SHOULD be equivalent to just considering both factors at once.    
     Use plot_type='heatmap' option
-        
+
 Approach 2: for every DTS, compute the correlation matrix (corr(Ri, Rj)_ij, where Ri and Rj are rankings 
     for models i and j resp. Then, aggregate over DTS, i.e., get the 3-tensor or rank correlation (Model1, Model2, DTS)
     and boxplot over DTS. This will give a matrix of boxplots      
     Use plot_type='boxplots' option
 """
+
+
 reload(u)
 reload(ru)
 
@@ -270,125 +286,36 @@ rho = sims["pw_rho.csv"]
 agrworst = sims["pw_agrworst.csv"]
 agrbest = sims["pw_agrbest.csv"]
 
-factors = ["model"]
-similarities = ["rho"]
-# for factor in factors:
-#     df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
-#                               comparison_level=factor)
-#
-# for similarity in similarities:
-#     u.plot_long_format_similarity_dataframe(df_sim, similarity, comparison_level=factor, plot_type="heatmap",
-#                                             color="black",
-#                                             save_plot=False, show_plot=True, draw_points=False,
-#                                             figsize_inches=(1.75, 2.5))
+model = "KNC"
 
-similarity = "rho"
-cmap = "rocket"
+rho = rho.loc(axis=0)[:, model, :, :].loc(axis=1)[:, model, :, :].droplevel("model", axis=0).droplevel("model", axis=1)
+agrbest = agrbest.loc(axis=0)[:, model, :, :].loc(axis=1)[:, model, :, :].droplevel("model", axis=0).droplevel("model", axis=1)
 
-similarity_ = similarity
-similarity = u.SIMILARITY_LATEX[similarity]
 
-fig, axes = plt.subplots(1, 3, figsize=(5.5, 3.5), gridspec_kw={'width_ratios': [1, 1, 1]})
-ypos = -0.6
+factors = ["tuning", "scoring"]
+similarities = ["rho", "agrbest"]
 
-# ---- model
-ax = axes[0]
-comparison_level = "model"
-df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
-                          comparison_level=comparison_level)
-df_sim = df_sim.rename(columns=u.SIMILARITY_LATEX)
-cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
-median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
-    .pivot(index=cl[0], columns=cl[1]) \
-    .droplevel([0], axis=1)
+# sns.set(font_scale=0.8)
+sns.set_style("ticks")
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
 
-ax = sns.heatmap(median_similarity, annot=True, ax=ax,
-                 vmin=-1 if similarity_ in {"taub", "rho"} else 0,
-                 vmax=1,
-                 cmap=cmap,
-                 square=True, cbar=False, annot_kws={"fontsize": 8})
-ax.set(xlabel=None, ylabel=None)
-ax.set_xticklabels(
-    ax.get_xticklabels(),
-    rotation=90,
-    horizontalalignment='right',
-    fontweight='light',
-    fontsize=10
-)
-ax.set_yticklabels([])
-ax.set_title("(a)", y=ypos)
+fig, axes = plt.subplots(1, len(factors), figsize=(5.5, 5.5/len(factors)))
+for (ax, factor) in zip(axes.flatten(), factors):
+    # df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
+    #                           comparison_level=factor)
+    df_sim = u.join_wide2long({"agrbest": agrbest, "rho": rho},
+                              comparison_level=factor)
+    u.heatmap_longformat_multisim(df_sim, similarities, factor, fontsize=7, annot_fontsize=7,
+                                  save_plot=False, show_plot=False, ax=ax)
 
-# ---- tuning
-ax = axes[1]
-
-comparison_level = "tuning"
-df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
-                          comparison_level=comparison_level)
-df_sim = df_sim.rename(columns=u.SIMILARITY_LATEX)
-cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
-median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
-    .pivot(index=cl[0], columns=cl[1]) \
-    .droplevel([0], axis=1)
-
-ax = sns.heatmap(median_similarity, annot=True, ax=ax,
-                 vmin=-1 if similarity_ in {"taub", "rho"} else 0,
-                 vmax=1,
-                 cmap=cmap,
-                 square=True, cbar=False)
-ax.set(xlabel=None, ylabel=None)
-ax.set_xticklabels(
-    ax.get_xticklabels(),
-    rotation=90,
-    horizontalalignment='right',
-    fontweight='light',
-    fontsize=10
-)
-ax.set_yticklabels([])
-ax.set_title("(b)", y=ypos)
-
-# ---- scoring
-ax = axes[2]
-
-comparison_level = "scoring"
-df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
-                          comparison_level=comparison_level)
-df_sim = df_sim.rename(columns=u.SIMILARITY_LATEX)
-cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
-median_similarity = df_sim[cl + [similarity]].groupby(cl).median().reset_index() \
-    .pivot(index=cl[0], columns=cl[1]) \
-    .droplevel([0], axis=1)
-
-ax = sns.heatmap(median_similarity, annot=True, ax=ax,
-                 vmin=-1 if similarity_ in {"taub", "rho"} else 0,
-                 vmax=1,
-                 cmap=cmap,
-                 square=True, cbar=False, cbar_kws={"shrink": .45})
-ax.set(xlabel=None, ylabel=None)
-ax.set_xticklabels(
-    ax.get_xticklabels(),
-    rotation=90,
-    horizontalalignment='right',
-    fontweight='light',
-    fontsize=10
-)
-ax.set_yticklabels([])
-ax.set_title("(c)", y=ypos)
-
-# ---- colorbar
-# ax = axes[3]
-# sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-1, 1))
-# sm.set_array([])
-#
-# plt.colorbar(sm, cax=ax, shrink=0.4, fraction=5)
-
-plt.tight_layout(pad=0.5, rect=[0, 0.2, 1, 1])
+# plt.savefig(u.FIGURES_DIR / "heatmap_allfactors_rho_agrbest.pdf")
 plt.show()
 
-
-# %% 2c2. Factor sensitivity multisimilarity
+# %% 2c1. Plot factor sensitivity - FINAL
 
 reload(u)
-reload(ru)
 
 sims = u.load_similarity_dataframes()
 taub = sims["pw_kendall_tau_b_p_nan=omit.csv"]
@@ -400,17 +327,49 @@ agrbest = sims["pw_agrbest.csv"]
 factors = ["model", "tuning", "scoring"]
 similarities = ["rho", "agrbest"]
 
-fig, axes = plt.subplots(1, len(factors), figsize=(5.5, 5.5/len(factors)))
-for (ax, factor) in zip(axes, factors):
+sns.set(font_scale=0.8)
+sns.set_style("ticks")
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
+
+factors = ["scoring"]
+
+for factor in factors:
     df_sim = u.join_wide2long({"taub": taub, "ptaub": ptaub, "agrbest": agrbest, "agrworst": agrworst, "rho": rho},
                               comparison_level=factor)
+    title = None
+    if factor == "model":
+        # figsize = (1.8, 2)
+        # title = "(b) ML model"
+        figsize = (1.8, 1.8)
+    elif factor == "tuning":
+        # figsize = (2.3, 1.2)
+        # title = "(c) Tuning strategy"
+        # tx = -1.5
+        # ty = 0.35
+        # adjust_left = 0.6
+        # adjust_right = 1
+        figsize = (1.2, 1.2)
+
+    elif factor == "scoring":
+        # figsize = (2.0, 1.1)
+        # title = "(d) Scoring"
+        # tx = -1.5
+        # ty = 0.35
+        # adjust_left = 0.7
+        # adjust_right = 1
+        figsize = (1.1, 1.1)
+
+    else:
+        raise AssertionError("Issue")
+
     u.heatmap_longformat_multisim(df_sim, similarities, factor, fontsize=8, annot_fontsize=8,
-                                  save_plot=False, show_plot=False, ax=ax)
+                                  figsize=figsize,
+                                  save_plot=True, show_plot=True, title=title,)
+                                  # tx=tx, ty=ty, adjust_left=adjust_left, adjust_right=adjust_right)
 
-plt.savefig(u.FIGURES_DIR / "heatmap_allfactors_['rho', 'agrbest'].pdf")
-plt.show()
-
-
+print("Showtime")
 # %% 3a. Interpretation sensitivity - Get the aggregation functions (ru.Aggregator cannot support missing evaluations)
 df, rf = u.load_df_rf()
 
@@ -493,7 +452,7 @@ for similarity in similarities:
                                             color="black", figsize_inches=(3, 3), fontsize=8, annot_fontsize=7,
                                             save_plot=False, show_plot=True, draw_points=False)
 
-# %% 3d. Aggregation sensitivity plots - two measures in the same heatmap
+# %% 3d. Plot aggregation sensitivity - FINAL
 
 reload(u)
 
@@ -507,9 +466,28 @@ agg_agrworst = aggsims["pw_AGG_agrworst.csv"]
 df_sim = u.join_wide2long({"taub": agg_taub, "ptaub": agg_ptaub, "rho": agg_rho, "agrbest": agg_agrbest,
                            "agrworst": agg_agrworst}, comparison_level="interpretation")
 
-fig, ax = plt.subplots(1, 1, figsize=(3, 3))
-u.heatmap_longformat_multisim(df_sim, ["rho", "agrbest"], "interpretation", fontsize=8, annot_fontsize=8,
-                              save_plot=True, show_plot=True, ax=ax, summary_statistic="mean")
+sns.set_style("ticks")
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
+
+fig, ax = plt.subplots(1, 1, figsize=(3, 3.3))
+u.heatmap_longformat_multisim(df_sim, ["rho", "agrbest"], "interpretation", fontsize=7, annot_fontsize=7,
+                              save_plot=True, show_plot=True, ax=ax, summary_statistic="mean", title=None)
+
+# %% 3d1. Average similarity
+
+aggsims = u.load_agg_similarities()
+agg_taub = aggsims["pw_AGG_kendall_tau_b_nan=omit.csv"]
+agg_ptaub = aggsims["pw_AGG_kendall_tau_b_p_nan=omit.csv"]
+agg_rho = aggsims["pw_AGG_spearman_rho_nan=omit.csv"]
+agg_agrbest = aggsims["pw_AGG_agrbest.csv"]
+agg_agrworst = aggsims["pw_AGG_agrworst.csv"]
+
+sim = agg_agrbest.to_numpy()
+np.fill_diagonal(sim, np.nan)
+print(np.nanmean(sim))
+
 
 # %% 3d2. Test for median_similarity --- removable
 comparison_level="scoring"; cl = [f"{comparison_level}_1", f"{comparison_level}_2"]; similarity = "rho"
@@ -541,8 +519,8 @@ sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
 run = True
 if run:
     # whenever we add experiments, start from the value of seed
-    seed = len(sample_df_sim)
-    sample_sizes = [50]
+    seed = 0
+    sample_sizes = [5, 10, 15, 20, 25]
     repetitions = 20
     mat_corrs = []
     sample_aggregators = defaultdict(lambda: [])
@@ -575,76 +553,196 @@ if run:
 
 # rename to AGGREGATION_NAMES but allow correctly formatted names
 sample_df_sim.interpretation = sample_df_sim.interpretation.map(lambda x: defaultdict(lambda: x, u.AGGREGATION_NAMES)[x])
-# sample_df_sim.to_csv(u.RANKINGS_DIR / f"sample_sim_{tuning}.csv", index=False)
+sample_df_sim.to_csv(u.RANKINGS_DIR / f"sample_sim_{tuning}.csv", index=False)
 
 # %% 4a1. Sensitivity on number of datasets - Plots
 reload(u)
 
-# sample_df_sim = u.load_sample_similarity_dataframe(tuning="model")
+sample_df_sim = u.load_sample_similarity_dataframe(tuning="no")
 
-u.lineplot_longformat_sample_sim(sample_df_sim, similarity="rho", save_plot=False, show_plot=True,
-                                 hue="model",
-                                 # errorbar=lambda x: (x.mean()-x.std()/10, x.mean()+x.std()/10),
+# sample_df_sim = sample_df_sim.query("model == 'LR'")
+
+fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+u.lineplot_longformat_sample_sim(sample_df_sim, similarity="rho", save_plot=False, show_plot=False,
+                                 hue="interpretation",
                                  estimator="mean",
+                                 errorbar="sd",
+                                 ax=ax
                                  )
+# ax.legend().remove()
+plt.show()
+print("Showtime")
+
+# %% 4a2a. Sensitivity - multiple plots and custom legend - TOP
+
+reload(u)
+
+sns.set(font_scale=0.8)
+sns.set_style("ticks")
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
+
+fig, axes = plt.subplots(1, 3, figsize=(5.5, 2), sharey="all")
+sim = "rho"
+hue = "model"
+handles = labels = None
+for ax, tuning in zip(axes, ["no", "model", "full"]):
+    sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
+
+    u.lineplot_longformat_sample_sim(sample_df_sim, similarity=sim, save_plot=False, show_plot=False,
+                                     hue=hue,
+                                     estimator="mean",
+                                     ax=ax,
+                                     )
+    if tuning == "no":
+        handles, labels = ax.get_legend_handles_labels()
+
+    ax.legend().remove()
+
+plt.subplots_adjust(top=3/4)
+plt.figlegend(
+    handles=handles,
+    labels=labels,
+    bbox_to_anchor=(0, 3/4+0.02, 1, 0.2),
+    loc="lower left",
+    mode="expand",
+    borderaxespad=1,
+    ncol=5
+)
+
+sns.despine(trim=True)
+
+# plt.savefig(u.FIGURES_DIR / f"top_sample_{sim}_{hue}.pdf", dpi=600)
+plt.show()
+
+print("Showtime")
+
+# %% 4a2b. Sensitivity - multiple plots and custom legend - BOTTOM
+
+reload(u)
+
+fig, axes = plt.subplots(1, 3, figsize=(5.5, 1.5), sharey="all")
+sim = "agrbest"
+hue = "model"
+for ax, tuning in zip(axes, ["no", "model", "full"]):
+    sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
+
+    u.lineplot_longformat_sample_sim(sample_df_sim, similarity=sim, save_plot=False, show_plot=False,
+                                     hue=hue,
+                                     estimator="mean",
+                                     ax=ax,
+                                     )
+    ax.legend().remove()
+
+sns.despine(trim=True)
+
+plt.savefig(u.FIGURES_DIR / f"bottom_sample_{sim}_{hue}.pdf", dpi=600)
+plt.show()
 
 
-# %% !!! 5. Most sensitive datasets - datasets with high performance difference (OUTDATED - NOT IN FULL PAPER)
-"""
-High-variability datasets are those for which the number of times the iqr (on e, fixed d, m, s) of encoder performances 
-    is greater than the median (on datasets) of such iqrs + the iqr of iqrs, and this has to happen at least 
-    the median + iqr times. 
-So: 
-    1) fix dataset, model, tuning, scoring: compute iqr of encoder performance
-    2) for every dataset: count the number of mst combinations for which the corresponding iqr is in the top 25%
-    3) keep the datasets for which such count is in the top 25% 
-    
-!!! NO LGBM YET
-"""
+# %% 4a2c. Sensitivity - 2 x 3 matrix
 
-rankings_folder = Path(u.RESULTS_DIR).parent / "Rankings"
-df = pd.read_csv(Path(u.RESULTS_DIR, "final.csv"))
-rf = pd.read_csv(rankings_folder / "rank_function_from_average_cv_score.csv", index_col=0, header=[0, 1, 2, 3])
+reload(u)
 
-factors = ["dataset", "model", "tuning", "scoring"]
+sns.set(font_scale=0.8)
+sns.set_style("ticks")
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
 
-b = df.groupby(factors).cv_score.agg(iqr).dropna()
-b = b.loc[b >= b.median() + iqr(b)].reset_index()
-b = b.groupby("dataset").size().sort_values()
-b = b.loc[b >= b.median()]  # 90 is half the combinations of fold-model-tuning-scoring (NO LGBM YET)
+fig = plt.figure(figsize=(5.5, 3))
+gs = fig.add_gridspec(2, 3)
 
-# high-variability datasets
-rf_hv = rf[b.index.astype(str)]
+hue = "interpretation"
 
-folder = Path(u.RESULTS_DIR).parent / "Full results"
+for isim, sim in enumerate(["rho", "agrbest"]):
+    for itun, tuning in enumerate(["no", "model", "full"]):
+        sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
 
-sns.set_theme(style="whitegrid", font_scale=0.3)
+        xb = (sim == "agrbest")
+        yl = (tuning == "no")
 
-melt_rf_hv = rf_hv.melt(ignore_index=False).reset_index()
-melt_rf_hv.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+        with sns.axes_style("ticks", {"xtick.bottom": True, "ytick.left": True}):
+            ax = fig.add_subplot(gs[isim, itun])
 
-grid = sns.FacetGrid(melt_rf_hv, col="scoring", row="model",
-                     margin_titles=True, sharey=False)
+            u.lineplot_longformat_sample_sim(sample_df_sim, similarity=sim, save_plot=False, show_plot=False,
+                                             hue=hue,
+                                             estimator="mean",
+                                             ax=ax,
+                                             )
+        if not xb:
+            ax.set_xlabel(None)
+            ax.set_xticklabels([])
+        if not yl:
+            ax.set_ylabel(None)
+            ax.set_yticklabels([])
 
-grid.set_titles(row_template="{row_name}", col_template="{col_name}")
+        ax.grid(axis="y", zorder=-1, linewidth=0.4)
 
-grid.map_dataframe(sorted_boxplot, x="rank", y="encoder",
-                   palette="crest", showfliers=False, linewidth=0.2, showcaps=False,
-                   medianprops=dict(color="red", linewidth=0.4))
-# grid.set_xticklabels(rotation=90)
+        if tuning == "no":
+            handles, labels = ax.get_legend_handles_labels()
 
-grid.despine(top=True, trim=True)
+        ax.legend().remove()
 
-grid.fig.set_size_inches(7.25, 10)
-grid.fig.tight_layout()
-grid.savefig(folder / f"encoder_rank_boxplot_matrix_HV.svg", dpi=600)
+        if sim == "rho":
+            ax.set_title(f"{tuning} tuning")
 
-# plt.show()
+    plt.tight_layout(w_pad=3, h_pad=1)
 
-print("Done")
-# %% 6a. Rank of encoders in grid
+    ## hue = model
+    # plt.subplots_adjust(top=0.86)
+    # plt.figlegend(
+    #     handles=handles,
+    #     labels=labels,
+    #     bbox_to_anchor=(0, 0.86+0.02, 1, 0.2),
+    #     loc="lower left",
+    #     mode="expand",
+    #     borderaxespad=1,
+    #     ncol=5,
+    #     frameon=False
+    # )
+
+    ## hue = interpretation
+    plt.subplots_adjust(top=0.8)
+    plt.figlegend(
+        handles=handles,
+        labels=labels,
+        bbox_to_anchor=(0, 0.8+0.02, 1, 0.2),
+        loc="lower left",
+        mode="expand",
+        borderaxespad=1,
+        ncol=5,
+        frameon=False
+    )
+
+    # hue = scoring
+    # plt.subplots_adjust(top=0.86)
+    # plt.figlegend(
+    #     handles=handles,
+    #     labels=labels,
+    #     bbox_to_anchor=(0, 0.86+0.02, 1, 0.2),
+    #     loc="lower center",
+    #     # mode="expand",
+    #     borderaxespad=1,
+    #     ncol=3,
+    #     frameon=False
+    # )
+
+sns.despine(trim=True)
+
+plt.savefig(u.FIGURES_DIR / f"sample_{hue}.pdf", dpi=600)
+plt.show()
+
+print("Showtime")
+
+# %% 6a. Rank of encoders in grid of models
+
+rf = u.load_rf()
 
 folder = u.FIGURES_DIR
+
+
 
 rf_melt = rf.melt(ignore_index=False).reset_index()
 rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
@@ -663,75 +761,199 @@ grid.despine(top=True, trim=True)
 
 grid.fig.set_size_inches(7.25, 10)
 grid.fig.tight_layout()
-grid.savefig(folder / f"encoder_rank_boxplot_matrix.pdf", dpi=600)
+# grid.savefig(folder / f"encoder_rank_boxplot_matrix.pdf", dpi=600)
 
 # plt.show()
 
 print("Done")
 
-# %% 6b. Plot overall ranks
+# %% 6b. Rank of encoders ALL
 
 reload(u)
 
 rf = u.load_rf()
-# rf = rf.loc(axis=1)[:, "DTC", "no", "AUC"]
-# rf = rf / rf.max(axis=0)
 
 rf_melt = rf.melt(ignore_index=False).reset_index()
 rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
 rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
 
-fig, ax = plt.subplots(1, 1, figsize=(5.5, 3))
-ax = u.sorted_boxplot_vertical(data=rf_melt, y="rank", x="encoder",
-                               palette=sns.light_palette("grey", n_colors=len(rf.index)), showfliers=False,
-                               linewidth=1, showcaps=False, medianprops=dict(color="red", linewidth=1),
-                               ax=ax)
-ax.set_xticklabels(
-    ax.get_xticklabels(),
-    rotation=90,
-    horizontalalignment='right',
-    fontweight='light',
-    fontsize=10
-)
-ax.set(xlabel=None)
+sns.set(font_scale=0.8)
+sns.set_style("ticks", {"ytick.left": False})
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
 
-plt.tight_layout(pad=0.5)
-plt.savefig(u.FIGURES_DIR / "boxplot_rank_all_experiments.pdf", dpi=600)
-# plt.show()
 
-# %% 6b1. Rank of encoders for fixed model
+fig, ax = plt.subplots(1, 1, figsize=(1.8, 4.4))
+ax = u.sorted_boxplot_horizontal(data=rf_melt, y="encoder", x="rank", order_by="mean",
+                                 # palette=sns.light_palette("grey", n_colors=len(rf.index)),
+                                 color="lightgrey",
+                                 showfliers=False,
+                                 linewidth=1, showcaps=False,
+                                 showmeans=True,
+                                 meanprops={"marker": "o",
+                                            "markeredgecolor": "red",
+                                            "markersize": 2},
+                                 medianprops={"linestyle": "-"
+                                 },
+                                 ax=ax)
+ax.set(xlabel=None, ylabel=None)
+ax.set_xlim(0, 32)
+ax.set_xticks([0, 10, 20, 30])
+ax.grid(axis="x", zorder=-1, linewidth=0.4)
+# ax.set_title("(c) All models")
+
+sns.despine(left=True, trim=True)
+plt.tight_layout(w_pad=0.5)
+plt.savefig(u.FIGURES_DIR / f"boxplot_rank_all.pdf", dpi=600)
+plt.show()
+
+# %% 6b1. Rank of encoders fixed model
 
 reload(u)
 
 rf = u.load_rf()
 
-model = "LR"
+model = "KNC"
 rf = rf.loc(axis=1)[:, model, :, :]
 
 rf_melt = rf.melt(ignore_index=False).reset_index()
 rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
 rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
 
-fig, ax = plt.subplots(1, 1, figsize=(5.5, 3))
-ax = u.sorted_boxplot_vertical(data=rf_melt, y="rank", x="encoder",
-                               palette=sns.light_palette("grey", n_colors=len(rf.index)), showfliers=False,
-                               linewidth=1, showcaps=False, medianprops=dict(color="red", linewidth=1),
-                               ax=ax)
-ax.set_xticklabels(
-    ax.get_xticklabels(),
-    rotation=90,
-    horizontalalignment='right',
-    fontweight='light',
-    fontsize=10
-)
-ax.set(xlabel=None)
+sns.set(font_scale=0.8)
+sns.set_style("ticks", {"ytick.left": False})
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
 
-plt.tight_layout(pad=0.5)
+
+fig, ax = plt.subplots(1, 1, figsize=(1.8, 4.4))
+ax = u.sorted_boxplot_horizontal(data=rf_melt, y="encoder", x="rank", order_by="mean",
+                                 # palette=sns.light_palette("grey", n_colors=len(rf.index)),
+                                 color="lightgrey",
+                                 showfliers=False,
+                                 linewidth=1, showcaps=False,
+                                 showmeans=True,
+                                 meanprops={"marker": "o",
+                                            "markeredgecolor": "red",
+                                            "markersize": 2},
+                                 medianprops={"linestyle": "-"
+                                 },
+                                 ax=ax)
+ax.set(xlabel=None, ylabel=None)
+ax.set_xlim(0, 32)
+ax.set_xticks([0, 10, 20, 30])
+ax.grid(axis="x", zorder=-1, linewidth=0.4)
+
+# if model == "DTC":
+#     title = "(a) Decision tree"
+# elif model == "LR":
+#     title = "(b) Logistic regression"
+# elif model == "all":
+#     title = "(c) All models"
+# else:
+#     raise ValueError("rip")
+# ax.set_title(title)
+
+sns.despine(left=True, trim=True)
+plt.tight_layout(w_pad=0.5)
+
 plt.savefig(u.FIGURES_DIR / f"boxplot_rank_{model}.pdf", dpi=600)
 plt.show()
 
+# %% 6b2. Rank of encoders - 1 x 3
+reload(u)
 
-# %% 6c. Significance of rank difference
+rf = u.load_rf()
+
+rf_melt = rf.melt(ignore_index=False).reset_index()
+rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
+
+sns.set(font_scale=0.8)
+sns.set_style("ticks", {"ytick.left": False})
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+mpl.rc('font', family='Times New Roman')
+
+models = ["DTC", "LR", "all"]
+fig, axes = plt.subplots(1, 3, figsize=(5.5, 4.4))
+for ax, model in zip(axes, models):
+
+    rf = u.load_rf() if model == "all" else u.load_rf().loc(axis=1)[:, model, :, :]
+
+    rf_melt = rf.melt(ignore_index=False).reset_index()
+    rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+    rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
+
+    u.sorted_boxplot_horizontal(data=rf_melt, y="encoder", x="rank", order_by="mean",
+                                color="lightgrey",
+                                showfliers=False,
+                                linewidth=1, showcaps=False,
+                                showmeans=True,
+                                meanprops={"marker": "o",
+                                            "markeredgecolor": "red",
+                                            "markersize": 2},
+                                medianprops={"linestyle": "-"},
+                                ax=ax)
+    ax.set(xlabel=None, ylabel=None)
+    ax.set_xlim(0, 32)
+    ax.set_xticks([0, 10, 20, 30])
+    ax.grid(axis="x", zorder=-1, linewidth=0.4)
+
+    if model == "DTC":
+        title = "Decision tree"
+    elif model == "LR":
+        title = "Logistic regression"
+    elif model == "all":
+        title = "All models"
+    else:
+        raise ValueError("rip")
+    ax.set_title(title)
+
+sns.despine(left=True, trim=True)
+plt.tight_layout(w_pad=2)
+plt.savefig(u.FIGURES_DIR / f"boxplot_rank.pdf", dpi=600)
+plt.show()
+
+
+# %% 6b2. Distribution of average ranks
+
+rf = u.load_rf()
+
+rf = rf / rf.max()
+
+rf_melt = rf.melt(ignore_index=False).reset_index()
+rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+rf_melt.encoder = rf_melt.encoder.map(u.ENCODER_LATEX)
+
+sns.set_style("ticks")
+
+fig, axes = plt.subplots(2, 3, figsize=(5.5, 3), sharex="all", sharey="all")
+
+for ax, model in zip(axes.flatten(), ["all"] + rf_melt.model.unique().tolist()):
+    if model == "all":
+        tmp = rf_melt.groupby("encoder").mean()
+    else:
+        tmp = rf_melt.query("model == @model").groupby("encoder").mean()
+
+    sns.histplot(data=tmp, x="rank",
+                 stat="density", binwidth=0.05,
+                 ax=ax)
+
+    ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1])
+
+    ax.set_title(model)
+
+
+sns.despine(trim=True)
+plt.tight_layout(pad=0.5)
+plt.show()
+
+print("Showtime")
+
+# %% 6c. Statistical tests for quality and rank difference
 
 df, rf = u.load_df_rf()
 a = ru.BaseAggregator(df=df, rf=rf)
@@ -739,23 +961,77 @@ a = ru.BaseAggregator(df=df, rf=rf)
 
 baseline = "OHE"
 
-test = (posthoc_nemenyi_friedman(a.rf.T.reset_index(drop=True)) < 0.05).astype(int).to_numpy()
-test = pd.DataFrame(test, index=rf.index, columns=rf.index)
-print(test.loc[baseline].sort_values())
+nemtest = (posthoc_nemenyi_friedman(a.rf.T.reset_index(drop=True)) < 0.05).astype(int).to_numpy()
+nemtest = pd.DataFrame(nemtest, index=rf.index, columns=rf.index)
+print(f"Nemenyi non-significant difference with {baseline}: ", set(nemtest.loc[baseline][nemtest.loc[baseline] == 0].index))
+
+df_ = df.groupby(["encoder", "dataset", "model", "tuning", "scoring"]).cv_score.mean().reset_index()
+ttest = []
+for scoring in ["ACC", "AUC", "F1"]:
+    df__ = df_.query("scoring == @scoring")
+    for e1, e2 in product(df_.encoder.unique(), repeat=2):
+        if e1 >= e2:
+            continue
+
+        df__1 = df__.query("encoder == @e1")
+        df__2 = df__.query("encoder == @e2")
+
+        df___ = pd.merge(df__1, df__2, how="inner", on=["dataset", "model", "tuning"])
+        best, pval = ru.compare_with_ttest(df___.cv_score_x, df___.cv_score_y, corrected=False)
+        ttest.append([scoring, e1, e2, best, pval])
+
+ttest = pd.DataFrame(ttest, columns=["scoring", "encoder_1", "encoder_2", "best_encoder", "pval"])
+for scoring in ["ACC", "AUC", "F1"]:
+    ttest_ = ttest.query("scoring == @scoring and "
+                         "(encoder_1 == @baseline or encoder_2 == @baseline) and "
+                         "best_encoder == 0")
+    # "((encoder_1 == @baseline and best_encoder == 2) or "
+    # "(encoder_2 == @baseline and best_encoder == 1))")
+    print(f"ttest non-significant for {scoring} and {baseline}: ",
+          set(ttest_.encoder_1.unique()).union(ttest_.encoder_2.unique()))
+
 
 # %% 6c1. Significance of rank difference for one model
 
 df, rf = u.load_df_rf()
-rf = rf.loc(axis=1)[:, "LR", :, :]
+
+model = "KNC"
+df = df.query("model == @model")
+rf = rf.loc(axis=1)[:, model, :, :]
 
 a = ru.BaseAggregator(df=df, rf=rf)
 # a.aggregate(strategies=["nemenyi rank"])
 
-baseline = "OHE"
+baseline = "WOEE"
 
-test = (posthoc_nemenyi_friedman(a.rf.T.reset_index(drop=True)) < 0.05).astype(int).to_numpy()
-test = pd.DataFrame(test, index=rf.index, columns=rf.index)
-print(test.loc[baseline].sort_values())
+nemtest = (posthoc_nemenyi_friedman(a.rf.T.reset_index(drop=True)) < 0.05).astype(int).to_numpy()
+nemtest = pd.DataFrame(nemtest, index=rf.index, columns=rf.index)
+print(f"Nemenyi non-significant difference with {baseline}: ", set(nemtest.loc[baseline][nemtest.loc[baseline] == 0].index))
+
+df_ = df.groupby(["encoder", "dataset", "model", "tuning", "scoring"]).cv_score.mean().reset_index()
+ttest = []
+for scoring in ["ACC", "AUC", "F1"]:
+    df__ = df_.query("scoring == @scoring")
+    for e1, e2 in product(df_.encoder.unique(), repeat=2):
+        if e1 >= e2:
+            continue
+
+        df__1 = df__.query("encoder == @e1")
+        df__2 = df__.query("encoder == @e2")
+
+        df___ = pd.merge(df__1, df__2, how="inner", on=["dataset", "model", "tuning"])
+        best, pval = ru.compare_with_ttest(df___.cv_score_x, df___.cv_score_y, corrected=False)
+        ttest.append([scoring, e1, e2, best, pval])
+
+ttest = pd.DataFrame(ttest, columns=["scoring", "encoder_1", "encoder_2", "best_encoder", "pval"])
+for scoring in ["ACC", "AUC", "F1"]:
+    ttest_ = ttest.query("scoring == @scoring and "
+                         "(encoder_1 == @baseline or encoder_2 == @baseline) and "
+                         "best_encoder == 0")
+    # "((encoder_1 == @baseline and best_encoder == 2) or "
+    # "(encoder_2 == @baseline and best_encoder == 1))")
+    print(f"ttest non-significant for {scoring} and {baseline}: ",
+          set(ttest_.encoder_1.unique()).union(ttest_.encoder_2.unique()))
 
 
 
@@ -932,7 +1208,7 @@ Other:
 """
 
 
-PARGENT = {
+PARGENT22 = {
     "datasets_int": [42178, 981, 4135, 1590, 1114, 41162, 42738, 41224],
     "datasets_str": [str(x) for x in [42178, 981, 4135, 1590, 1114, 41162, 42738, 41224]],
     "models": ["LGBMC", "SVC", "KNC"],
@@ -943,14 +1219,222 @@ PARGENT = {
 
 df, rf = u.load_df_rf()
 
-df = df.query("dataset in @PARGENT['datasets_int'] "
-              "and model in @PARGENT['models'] "
-              "and tuning in @PARGENT['tunings']"
-              "and scoring in @PARGENT['scorings']")
-rf = rf.loc(axis=1)[PARGENT["datasets_str"], PARGENT["models"], PARGENT["tunings"], PARGENT["scorings"]]
+df = df.query("dataset in @PARGENT22['datasets_int'] "
+              "and model in @PARGENT22['models'] "
+              "and tuning in @PARGENT22['tunings']"
+              "and scoring in @PARGENT22['scorings']")
+rf = rf.loc(axis=1)[PARGENT22["datasets_str"], PARGENT22["models"], PARGENT22["tunings"], PARGENT22["scorings"]]
 
 a = ru.Aggregator(df, rf)
-a.aggregate(strategies=PARGENT["aggregations"], verbose=True)
+a.aggregate(strategies=PARGENT22["aggregations"], verbose=True)
+
+# %% 8b. Comparison with Cerda (2022)
+"""
+Discrepancies: 
+
+Datasets:
+    only adult (curated) is in both studies. They focus more on multiclass and regression
+Models:
+    XGBoost -> LGBM
+Scorings:
+    precision -> F1
+Tunings:
+
+Aggregations: 
+
+Other: 
+"""
+
+CERDA22 = {
+    "datasets_int": [1590],
+    "datasets_str": [str(x) for x in [1590]],
+    "models": ["LGBMC"],
+    "tunings": ["no"],
+    "scorings": ["F1"],
+    "aggregations": ['rescaled mean quality'],
+    "encoders": ["OHE", "MHE"]
+}
+
+df, rf = u.load_df_rf()
+
+df = df.query("dataset in @CERDA22['datasets_int'] "
+              "and model in @CERDA22['models'] "
+              "and tuning in @CERDA22['tunings']"
+              "and scoring in @CERDA22['scorings']")
+rf = rf.loc(axis=1)[CERDA22["datasets_str"], CERDA22["models"], CERDA22["tunings"], CERDA22["scorings"]]
+
+# a = ru.Aggregator(df, rf)
+# a.aggregate(strategies=CERDA22["aggregations"], verbose=True)
+
+df_ = df.query("encoder in @CERDA22['encoders']")
+
+
+
+# %% 8c. Comparison with Valdez-Valenzuela (2021)
+"""
+Discrepancies: 
+
+Datasets:
+    They say "supplementary material" but this does not exist on IEEE. 
+
+Models:
+    MISSING neural network
+Scorings:
+    precision -> F1
+Tunings:
+
+Aggregations: 
+
+Other: 
+"""
+
+# 1590 adult
+# 40945 titanic
+# 31 credit-g
+# 42178 telco
+
+VALDEZ21 = {
+    "datasets_int": [1590],
+    "datasets_str": [str(x) for x in [1590]],
+    "models": ["LGBMC", "LR", "SVC"],
+    "tunings": ["no"],
+    "scorings": ["ACC"],
+}
+
+df, rf = u.load_df_rf()
+
+df = df.query("dataset in @VALDEZ21['datasets_int'] "
+              "and model in @VALDEZ21['models'] "
+              "and tuning in @VALDEZ21['tunings']"
+              "and scoring in @VALDEZ21['scorings']")
+rf = rf.loc(axis=1)[VALDEZ21["datasets_str"], VALDEZ21["models"], VALDEZ21["tunings"], VALDEZ21["scorings"]]
+
+# a = ru.Aggregator(df, rf)
+# a.aggregate(strategies=VALDEZ21["aggregations"], verbose=True)
+
+df_ = df.groupby(["encoder", "dataset", "model", "tuning", "scoring"]).cv_score.mean().reset_index()
+
+for model in VALDEZ21["models"]:
+    df__ = df_.query("model == @model")
+    # print(f"{model} best :", df__.loc[df__.cv_score == df__.cv_score.max()].iloc[0].encoder)
+    # print(f"{model} worst:", df__.loc[df__.cv_score == df__.cv_score.min()].iloc[0].encoder)
+    print(df__.sort_values("cv_score")[["model", "encoder", "cv_score"]])
+
+
+
+# %% 8d. Comparison with Wright (2019)
+"""
+Discrepancies: 
+
+Datasets:
+
+Models:
+
+Tunings:
+
+Aggregations: 
+
+Other: 
+"""
+
+WRIGHT19 = {
+    "datasets_int": [50],
+    "datasets_str": [str(x) for x in [50]],
+    "models": ["LGBMC"],
+    "tunings": ["no"],
+    "scorings": ["ACC"],
+    "encoders": ["TE", "DE", "OHE"]
+    }
+
+df, rf = u.load_df_rf()
+
+df = df.query("dataset in @WRIGHT19['datasets_int'] "
+              "and model in @WRIGHT19['models'] "
+              "and tuning in @WRIGHT19['tunings']"
+              "and scoring in @WRIGHT19['scorings']")
+rf = rf.loc(axis=1)[WRIGHT19["datasets_str"], WRIGHT19["models"], WRIGHT19["tunings"], WRIGHT19["scorings"]]
+
+for encoder in WRIGHT19["encoders"]:
+    df_ = df.query("encoder == @encoder").groupby(["encoder", "model", "dataset", "scoring"]).cv_score.agg(["mean", "max"]).reset_index()
+    print(df_)
+
+# %% 8e. Comparison with Dahouda (2021)
+
+"""
+Discrepancies: 
+
+Datasets:
+
+Models:
+
+Tunings:
+
+Aggregations: 
+
+Other: 
+"""
+
+DAHOUDA21 = {
+    "datasets_int": [1461],
+    "datasets_str": [str(x) for x in [1461]],
+    "models": ["LR"],
+    "tunings": ["no"],
+    "scorings": ["ACC"],
+    "encoders": ["TE", "BE", "OHE"]
+}
+
+df, rf = u.load_df_rf()
+
+df = df.query("dataset in @DAHOUDA21['datasets_int'] "
+              "and model in @DAHOUDA21['models'] "
+              "and tuning in @DAHOUDA21['tunings']"
+              "and scoring in @DAHOUDA21['scorings']")
+rf = rf.loc(axis=1)[DAHOUDA21["datasets_str"], DAHOUDA21["models"], DAHOUDA21["tunings"], DAHOUDA21["scorings"]]
+
+for encoder in DAHOUDA21["encoders"]:
+    df_ = df.query("encoder == @encoder").groupby(["encoder", "model", "dataset", "scoring"]).cv_score.agg(["mean", "std"]).reset_index()
+    print(df_)
+# %% 8f. Comparison with Cerda (2018)
+"""
+Discrepancies: 
+
+Datasets:
+    only adult (curated) is in both studies. They focus more on multiclass and regression
+Models:
+    XGBoost -> LGBM
+Scorings:
+    precision -> F1
+Tunings:
+
+Aggregations: 
+
+Other: 
+"""
+
+CERDA18 = {
+    "datasets_int": [42738],
+    "datasets_str": [str(x) for x in [42738]],
+    "models": ["LGBMC"],
+    "tunings": ["no"],
+    "scorings": ["F1"],
+    "encoders": ["OHE", "ME01E", "ME1E", "ME10E"]
+}
+
+df, rf = u.load_df_rf()
+
+df = df.query("dataset in @CERDA18['datasets_int'] "
+              "and model in @CERDA18['models'] "
+              "and tuning in @CERDA18['tunings']"
+              "and scoring in @CERDA18['scorings']")
+rf = rf.loc(axis=1)[CERDA18["datasets_str"], CERDA18["models"], CERDA18["tunings"], CERDA18["scorings"]]
+
+# a = ru.Aggregator(df, rf)
+# a.aggregate(strategies=CERDA18["aggregations"], verbose=True)
+
+df_ = df.query("encoder in @CERDA18['encoders']").groupby(["encoder", "dataset", "model"]).cv_score.agg(["mean", "max"]).reset_index()
+
+
+
 
 
 

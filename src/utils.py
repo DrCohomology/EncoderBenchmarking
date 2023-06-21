@@ -16,7 +16,7 @@ import time
 import warnings
 
 from functools import reduce
-from itertools import product
+from itertools import cycle, product
 from numpy.random import default_rng
 from openml.datasets import get_dataset
 from pathlib import Path
@@ -55,56 +55,56 @@ FIGURES_DIR = BASE_DIR / "Figures"
 
 # --- Datasets
 DATASETS = MappingProxyType({
-    'kr-vs-kp': 3,
-    'credit-approval': 29,
-    'credit-g': 31,
-    'sick': 38,
-    'tic-tac-toe': 50,
-    'heart-h': 51,
-    'vote': 56,
-    'monks-problems-1': 333,
-    'monks-problems-2': 334,
-    'irish': 451,
-    'profb': 470,
-    'mv': 881,
-    'molecular-biology_promoters': 956,
-    'nursery': 959,
-    'kdd_internet_usage': 981,
-    'ada_prior': 1037,
-    'KDDCup09_appetency': 1111,
-    'KDDCup09_churn': 1112,
-    'KDDCup09_upselling': 1114,
-    'airlines': 1169,
-    'Agrawal1': 1235,
-    'bank-marketing': 1461,
-    'blogger': 1463,
-    'nomao': 1486,
-    'thoracic-surgery': 1506,
-    'wholesale-customers': 1511,
-    'adult': 1590,
-    'amazon_employee_access': 4135,
-    'cylinder-bands': 6332,
-    'dresses-sales': 23381,
-    'SpeedDating': 40536,
-    'Titanic': 40945,
-    'Australian': 40981,
-    'jungle_chess_2pcs_endgame_elephant_elephant': 40999,
-    'jungle_chess_2pcs_endgame_rat_rat': 41005,
-    'jungle_chess_2pcs_endgame_lion_lion': 41007,
-    'kick': 41162,
-    'porto-seguro': 41224,
-    'telco-customer-churn': 42178,
-    'KDD98': 42343,
-    'sf-police-incidents': 42344,
-    'open_payments': 42738,
-    'Census-Income-KDD': 42750,
-    'students_scores': 43098,
-    'WMO-Hurricane-Survival-Dataset': 43607,
-    'law-school-admission-bianry': 43890,
-    'national-longitudinal-survey-binary': 43892,
-    'ibm-employee-attrition': 43896,
-    'ibm-employee-performance': 43897,
-    'mushroom': 43922
+    'kr-vs-kp': 3,                                                  # https://archive.ics.uci.edu/dataset/22/chess+king+rook+vs+king+pawn
+    'credit-approval': 29,                                          # http://archive.ics.uci.edu/dataset/27/credit+approval
+    'credit-g': 31,                                                 # https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
+    'sick': 38,                                                     # http://archive.ics.uci.edu/dataset/102/thyroid+disease
+    'tic-tac-toe': 50,                                              # http://archive.ics.uci.edu/dataset/101/tic+tac+toe+endgame
+    'heart-h': 51,                                                  # https://archive.ics.uci.edu/dataset/45/heart+disease
+    'vote': 56,                                                     # https://archive.ics.uci.edu/dataset/105/congressional+voting+records
+    'monks-problems-1': 333,                                        # https://archive.ics.uci.edu/dataset/70/monk+s+problems
+    'monks-problems-2': 334,                                        # https://archive.ics.uci.edu/dataset/70/monk+s+problems
+    'irish': 451,                                                   # http://lib.stat.cmu.edu/datasets/irish.ed
+    'profb': 470,                                                   # http://lib.stat.cmu.edu/datasets/profb
+    'mv': 881,                                                      # https://www.openml.org/search?type=data&status=active&id=881
+    'molecular-biology_promoters': 956,                             # https://archive.ics.uci.edu/dataset/67/molecular+biology+promoter+gene+sequences
+    'nursery': 959,                                                 # https://www.openml.org/search?type=data&status=active&id=26
+    'kdd_internet_usage': 981,                                      # https://www.openml.org/search?type=data&status=active&id=4133
+    'ada_prior': 1037,                                              # https://www.agnostic.inf.ethz.ch/datasets.php
+    'KDDCup09_appetency': 1111,                                     # https://www.openml.org/search?type=data&status=active&id=1111&sort=runs
+    'KDDCup09_churn': 1112,                                         # https://www.openml.org/search?type=data&status=active&id=1112&sort=runs
+    'KDDCup09_upselling': 1114,                                     # https://www.openml.org/search?type=data&status=active&id=1114
+    'airlines': 1169,                                               # https://www.openml.org/search?type=data&status=active&id=1169
+    'Agrawal1': 1235,                                               # https://www.openml.org/search?type=data&status=active&id=1235
+    'bank-marketing': 1461,                                         # https://archive.ics.uci.edu/dataset/222/bank+marketing
+    'blogger': 1463,                                                # https://www.ijcaonline.org/archives/volume47/number18/7291-0509
+    'nomao': 1486,                                                  # https://archive.ics.uci.edu/dataset/227/nomao
+    'thoracic-surgery': 1506,                                       # https://www.openml.org/search?type=data&status=active&id=1506
+    'wholesale-customers': 1511,                                    # https://www.openml.org/search?type=data&status=active&id=1511
+    'adult': 1590,                                                  # https://www.openml.org/search?type=data&status=active&id=1590
+    'amazon_employee_access': 43900,  #4135                               # https://www.kaggle.com/competitions/amazon-employee-access-challenge/data
+    'cylinder-bands': 6332,                                         # https://archive.ics.uci.edu/dataset/32/cylinder+bands
+    'dresses-sales': 23381,                                         # https://archive.ics.uci.edu/dataset/289/dresses+attribute+sales
+    'SpeedDating': 40536,                                           # https://www.openml.org/search?type=data&status=active&id=40536
+    'Titanic': 40945,                                               # https://www.openml.org/search?type=data&status=active&id=40945
+    'Australian': 40981,                                            # https://archive.ics.uci.edu/dataset/143/statlog+australian+credit+approval
+    'jungle_chess_2pcs_endgame_elephant_elephant': 40999,           # https://www.openml.org/search?type=data&status=active&id=40999
+    'jungle_chess_2pcs_endgame_rat_rat': 41005,                     # https://www.openml.org/search?type=data&status=active&id=41005
+    'jungle_chess_2pcs_endgame_lion_lion': 41007,                   # https://www.openml.org/search?type=data&status=active&id=41007
+    'kick': 41162,                                                  # https://www.openml.org/search?type=data&status=active&id=41162
+    'porto-seguro': 41224,                                          # https://www.kaggle.com/competitions/porto-seguro-safe-driver-prediction
+    'telco-customer-churn': 42178,                                  # https://www.kaggle.com/datasets/blastchar/telco-customer-churn/discussion
+    'KDD98': 42343,                                                 # https://kdd.ics.uci.edu/databases/kddcup98/kddcup98.html
+    'sf-police-incidents': 42344,                                   # https://www.openml.org/search?type=data&status=active&id=42344
+    'open_payments': 42738,                                         # https://www.openml.org/search?type=data&status=active&id=42738
+    'Census-Income-KDD': 42750,                                     # https://www.openml.org/search?type=data&status=active&id=42750
+    'students_scores': 43098,                                       # https://www.openml.org/search?type=data&status=active&id=43098
+    'WMO-Hurricane-Survival-Dataset': 43607,                        # https://www.openml.org/search?type=data&status=active&id=43607
+    'law-school-admission-bianry': 43890,                           # https://www.openml.org/search?type=data&status=active&id=43890
+    'national-longitudinal-survey-binary': 43892,                   # https://www.openml.org/search?type=data&status=active&id=43892
+    'ibm-employee-attrition': 43896,                                # https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
+    'ibm-employee-performance': 43897,                              # https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
+    'mushroom': 43922                                               # https://www.openml.org/search?type=data&status=active&id=24
 })
 DATASETS_SMALL = MappingProxyType({
     'kr-vs-kp': 3,
@@ -231,8 +231,8 @@ SIMILARITY_LATEX = MappingProxyType({
     "ptaub_std": r"$\sigma(p \tau_b)$",
     "rho": r"$\rho$",
     "rho_std": r"$\sigma(\rho)$",
-    "agrbest": r"$\alpha_{best}$",
-    "agrbest_std": r"$\sigma(\alpha_{best})$",
+    "agrbest": r"$J$",
+    "agrbest_std": r"$\sigma(J)$",
     "agrworst": r"$\alpha_{worst}$",
     "agrworst_std": r"$\sigma(\alpha_{worst})$",
 })
@@ -253,18 +253,18 @@ ENCODER_LATEX = MappingProxyType({
     "CV5RGLMME": "CV$_{5}$GLMM",
     "CV10RGLMME": "CV$_{10}$GLMM",
     "DE": "Drop",
-    "DTEM2": "D$_{2}$",
-    "DTEM5": "D$_{5}$",
-    "DTEM10": "D$_{10}$",
+    "DTEM2": "D$_{2}$MT",
+    "DTEM5": "D$_{5}$MT",
+    "DTEM10": "D$_{10}$MT",
     "ME01E": "ME$_{0.1}$",
     "ME1E": "ME$_{1}$",
     "ME10E": "ME$_{10}$",
     "MHE": "MH",
     "OE": "Ord",
     "OHE": "OH",
-    "PBTE0001": "PB$_{0.001}$",
-    "PBTE001": "PB$_{0.01}$",
-    "PBTE01": "PB$_{0.1}$",
+    "PBTE0001": "PB$_{0.001}$MT",
+    "PBTE001": "PB$_{0.01}$MT",
+    "PBTE01": "PB$_{0.1}$MT",
     "RGLMME": "GLMM",
     "SE": "Sum",
     "TE": "MT",
@@ -304,6 +304,24 @@ AGGREGATION_PALETTE = MappingProxyType({
     "RN05": "#00303c",
     "RN10": "#00323c",
     "RK": None
+})
+
+# --- Palettes and markers
+MARKERS = cycle(["o", "v", "^", "<", "s", "P", "*", "X", "D"])
+COLORS = ["#CD1E1E", "#1E1EC8", "#1EC81E", "#64641E", "#FFA500",
+          "#729EA1", "#AC8887", "#CCFF66", "#5D576B", "#99E1D9", "#B9E28C", "#D6D84F", "#FC814A"]
+DASHES = cycle([(1, 1), (2, 2), (2, 1), (1, 2), (0.5, 0.5)])
+FACTOR_MARKERS = MappingProxyType({
+    factor: MappingProxyType(dict(zip(latex_names_dict.values(), MARKERS)))
+    for factor, latex_names_dict in FACTOR_LATEX.items()
+})
+FACTOR_COLORS = MappingProxyType({
+    factor: MappingProxyType(dict(zip(latex_names_dict.values(), COLORS)))
+    for factor, latex_names_dict in FACTOR_LATEX.items()
+})
+FACTOR_DASHES = MappingProxyType({
+    factor: MappingProxyType(dict(zip(latex_names_dict.values(), DASHES)))
+    for factor, latex_names_dict in FACTOR_LATEX.items()
 })
 
 
@@ -915,7 +933,7 @@ def join_wide2long(named_dataframes: dict[str: pd.DataFrame], comparison_level: 
 
     output has schema 'levels' + ['comparison_level'_1, 'comparison_level'_2] + list(named_dataframes.keys())
     """
-    levels = ""
+    levels = []
     for similarity, df_sim in named_dataframes.items():
         if len(levels) > 0:
             if levels != list(df_sim.columns.names):
@@ -941,9 +959,20 @@ def index_sorted_by_median(df, groupby_col, target_col):
     return df.groupby(groupby_col)[target_col].median().sort_values().index
 
 
-def sorted_boxplot_horizontal(data, x, y, **kwargs):
+def index_sorted_by_mean(df, groupby_col, target_col):
+    return df.groupby(groupby_col)[target_col].mean().sort_values().index
+
+
+def sorted_boxplot_horizontal(data, x, y, order_by="median", **kwargs):
+    if order_by == "median":
+        order = index_sorted_by_median(data, groupby_col=y, target_col=x)
+    elif order_by == "mean":
+        order = index_sorted_by_mean(data, groupby_col=y, target_col=x)
+    else:
+        raise ValueError(f"{order_by} is an invalid value for order_by.")
+
     return sns.boxplot(data, x=x, y=y,
-                       order=index_sorted_by_median(data, groupby_col=y, target_col=x),
+                       order=order,
                        **kwargs)
 
 
@@ -1057,17 +1086,28 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
                                 comparison_level: str,
                                 fontsize=10,
                                 annot_fontsize=10,
+                                figsize=(1.8, 1.8),
                                 fmt: str = ".1f",
-                                cmaps: tuple = (sns.color_palette("Reds", as_cmap=True),
-                                                sns.color_palette("Blues", as_cmap=True)),
+                                cmaps: tuple = (sns.light_palette(("#CD212A"), as_cmap=True),
+                                                sns.light_palette("#2A21CD", as_cmap=True)),
                                 save_plot: bool = True,
                                 show_plot: bool = True,
                                 ax=None,
                                 summary_statistic: Literal["mean", "median"] = "mean",
+                                title=None,
+                                tx=None,
+                                ty=None,
+                                adjust_left=0,
+                                adjust_right=0
                                 ):
     """
     Gets and heatmap of the similarity dataframe df_im in long format.
+
+    tx and ty are the x and y postions of the title
     """
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize, clear=True)
 
     eye = np.eye(df_sim[f"{comparison_level}_1"].nunique())
     eye[eye == 0] = np.nan
@@ -1079,13 +1119,15 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
     ax = sns.heatmap(diag,
                      annot=False, ax=ax,
                      cmap=sns.color_palette("Greys", as_cmap=True),
-                     vmin=0, vmax=1,
+                     vmin=1, vmax=1,
                      square=True,
                      cbar=False,
                      fmt=fmt,
                      annot_kws={"fontsize": annot_fontsize})
 
     for i, (similarity, cmap) in enumerate(zip(similarities, cmaps)):
+
+        # compute statistic (mean, average) from df_sim
         cl = [f"{comparison_level}_1", f"{comparison_level}_2"]
         aggsim = df_sim[cl + [similarity]].groupby(cl).agg(summary_statistic).reset_index() \
             .pivot(index=cl[0], columns=cl[1]) \
@@ -1093,13 +1135,27 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
             .rename(index=FACTOR_LATEX[comparison_level],
                     columns=FACTOR_LATEX[comparison_level])
 
+        if i == 1:
+            aggsim = aggsim.T
+
         # remove diagonal
         tmp = aggsim.to_numpy()
         np.fill_diagonal(tmp, np.nan)
         aggsim = pd.DataFrame(tmp, index=aggsim.index, columns=aggsim.columns)
 
-        if i == 1:
-            aggsim = aggsim.T
+        # remove 0's and plot them separately
+        zeros = np.zeros_like(aggsim)
+        zeros[(aggsim > 0.05) | (np.isnan(aggsim))] = np.nan
+        aggsim[aggsim <= 0.05] = np.nan
+
+        ax = sns.heatmap(zeros,
+                         annot=True, ax=ax,
+                         cmap=cmap,
+                         vmin=0, vmax=1,
+                         square=True,
+                         cbar=False,
+                         fmt=".0f",
+                         annot_kws={"fontsize": annot_fontsize})
 
         ax = sns.heatmap(aggsim, annot=True, ax=ax,
                          vmin=0 if similarity in ["taub", "rho"] else 0,
@@ -1126,10 +1182,19 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
         fontsize=fontsize
     )
 
+    if title is not None:
+        if comparison_level in ["tuning", "scoring"]:
+            plt.subplots_adjust(left=adjust_left, right=adjust_right)
+            ax.set_title(title, x=tx, y=ty, fontsize=fontsize+1)
+        elif comparison_level in ["model", "interpretation"]:
+            ax.set_title(title, fontsize=9)
+
+
+    sns.despine()
     plt.tight_layout(pad=0.5)
 
     if save_plot:
-        plt.savefig(FIGURES_DIR / f"heatmap_interpretation_{similarities}.pdf", dpi=600)
+        plt.savefig(FIGURES_DIR / f"heatmap_{comparison_level}_{similarities[0]}_{similarities[1]}.pdf", dpi=600)
 
     if show_plot:
         plt.show()
@@ -1139,46 +1204,57 @@ def lineplot_longformat_sample_sim(df_sim, similarity,
                                    save_plot=False, show_plot=False,
                                    # factor_hue: Iterable = tuple("interpretation"),
                                    hue: str = "interpretation",
+                                   ax=None,
                                    **kwargs):
     """
     factor_hue makes sense if multiple factors are used in the hue.
     As I don't think I'll use that in the plots, use just one factor.
+
+    xb and yl control ticks
     """
 
     df_sim = df_sim.copy()
 
-    fig, ax = plt.subplots(1, 1, figsize=(2.5, 2.5))
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(2.5, 2.5))
 
+    df_sim = df_sim.rename(columns={"sample_size": "sample size"})
     df_sim[hue] = df_sim[hue].map(FACTOR_LATEX[hue])
 
-    markers = dict(zip(df_sim[hue].unique(),
-                       ["o", "v", "^", "<", "s", "P", "*", "X", "D"]))
-
-    ax = sns.lineplot(df_sim, x="sample_size", y=similarity,
+    ax = sns.lineplot(df_sim, x="sample size", y=similarity,
                       style=hue,
                       hue=hue,
-                      markers=markers,
+                      dashes=dict(FACTOR_DASHES[hue]),
+                      markers=dict(FACTOR_MARKERS[hue]),
+                      palette=dict(FACTOR_COLORS[hue]),
                       ax=ax,
-                      **kwargs
-                      # palette=sns.light_palette("grey", n_colors=np.prod(df_sim.nunique()[hue]))
                       )
-    ax.set_xticks([5, 10, 15, 20, 25])
 
-    # 'interpretation' is already in its correct form, but the other handles for hue have to be changed
-    ax.legend(loc="lower right",
-              ncols=3,
-              fontsize=7)
+    # !!! hereafter, everything is hard-coded for the 2x3 plot with rho on top, section 4a2c. of result_analysis.py
+    if similarity == "rho":
+        ax.set_yticks([0.0, 0.2, 0.4, 0.6])
+        ax.set_ylim((0, 0.61))
+        ax.set_xticks(df_sim["sample size"].unique())
+    elif similarity == "agrbest":
+        if hue == "interpretation":
+            ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1])
+            ax.set_ylim((0, 1.01))
+        else:
+            ax.set_yticks([0.0, 0.1, 0.3, 0.5])
+            ax.set_ylim((0, 0.51))
+
+
+
+        ax.set_xticks(df_sim["sample size"].unique())
+
     ax.set_ylabel(SIMILARITY_LATEX[similarity])
-
-    fig.tight_layout(pad=0.5)
 
     if show_plot:
         plt.show()
 
     if save_plot:
-        fig.savefig(FIGURES_DIR / f"lineplot_sample_{hue}_{similarity}.pdf", dpi=600)
+        plt.savefig(FIGURES_DIR / f"lineplot_sample_{hue}_{similarity}.pdf", dpi=600)
         print(f"Saved figure in {FIGURES_DIR}/lineplot_sample_{hue}_{similarity}.pdf")
-
 
 def boxplots_longformat_sample_sim(df_sim, similarity,
                                    save_plot=False, show_plot=False,

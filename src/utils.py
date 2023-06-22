@@ -52,6 +52,7 @@ RESULTS_DIR = BASE_DIR / "ExperimentalResults"
 RANKINGS_DIR = BASE_DIR / "Rankings"
 SENSITIVITY_DIR = BASE_DIR / "Sensitivity"
 FIGURES_DIR = BASE_DIR / "Figures"
+TMP_DIR = BASE_DIR / "tmp"
 
 # --- Datasets
 DATASETS = MappingProxyType({
@@ -233,6 +234,8 @@ SIMILARITY_LATEX = MappingProxyType({
     "rho_std": r"$\sigma(\rho)$",
     "agrbest": r"$J$",
     "agrbest_std": r"$\sigma(J)$",
+    "jaccard": r"$J$",
+    "jaccard_std": r"$\sigma(J)$",
     "agrworst": r"$\alpha_{worst}$",
     "agrworst_std": r"$\sigma(\alpha_{worst})$",
 })
@@ -801,7 +804,7 @@ def load_aggrf() -> pd.DataFrame:
     Load dataframe of aggregate rankings from hard-coded path
     """
 
-    return pd.read_csv(RANKINGS_DIR / "aggregated_ranks_from_average_cv_score.csv", index_col=0,
+    return pd.read_csv(RANKINGS_DIR / "consensuses.csv", index_col=0,
                        header=[0, 1, 2, 3])
 
 
@@ -865,7 +868,7 @@ def pairwise_similarity_wide_format(aggrf: pd.DataFrame,
     """
     simfunc is assumed to be a similarity between rankings, i.e., a symmetric function of two rankings with
         maximum in 1.
-    The output is an upper triangular dataframe
+    The output is a list of upper triangular dataframes.
     """
 
     factor_combinations = aggrf.columns.sort_values()
@@ -1186,7 +1189,7 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
         if comparison_level in ["tuning", "scoring"]:
             plt.subplots_adjust(left=adjust_left, right=adjust_right)
             ax.set_title(title, x=tx, y=ty, fontsize=fontsize+1)
-        elif comparison_level in ["model", "interpretation"]:
+        elif comparison_level in ["model", "aggregation"]:
             ax.set_title(title, fontsize=9)
 
 
@@ -1202,8 +1205,8 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
 
 def lineplot_longformat_sample_sim(df_sim, similarity,
                                    save_plot=False, show_plot=False,
-                                   # factor_hue: Iterable = tuple("interpretation"),
-                                   hue: str = "interpretation",
+                                   # factor_hue: Iterable = tuple("aggregation"),
+                                   hue: str = "aggregation",
                                    ax=None,
                                    **kwargs):
     """
@@ -1236,7 +1239,7 @@ def lineplot_longformat_sample_sim(df_sim, similarity,
         ax.set_ylim((0, 0.61))
         ax.set_xticks(df_sim["sample size"].unique())
     elif similarity == "agrbest":
-        if hue == "interpretation":
+        if hue == "aggregation":
             ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1])
             ax.set_ylim((0, 1.01))
         else:
@@ -1256,10 +1259,11 @@ def lineplot_longformat_sample_sim(df_sim, similarity,
         plt.savefig(FIGURES_DIR / f"lineplot_sample_{hue}_{similarity}.pdf", dpi=600)
         print(f"Saved figure in {FIGURES_DIR}/lineplot_sample_{hue}_{similarity}.pdf")
 
+
 def boxplots_longformat_sample_sim(df_sim, similarity,
                                    save_plot=False, show_plot=False,
-                                   # factor_hue: Iterable = tuple("interpretation"),
-                                   hue: str = "interpretation"):
+                                   # factor_hue: Iterable = tuple("aggregation"),
+                                   hue: str = "aggregation"):
     """
     factor_hue makes sense if multiple factors are used in the hue.
     As I don't think I'll use that in the plots, use just one factor.
@@ -1280,7 +1284,7 @@ def boxplots_longformat_sample_sim(df_sim, similarity,
 
     # sns.move_legend(ax, loc="upper right", bbox_to_anchor=(1.4, 1))
 
-    # 'interpretation' is already in its correct form, but the other handles for hue have to be changed
+    # 'aggregation' is already in its correct form, but the other handles for hue have to be changed
     ax.legend(loc="lower right",
               ncols=3,
               fontsize=7)

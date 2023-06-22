@@ -1,24 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Jun  5 14:41:36 2022
-
-@author: federicom
-"""
-
-#TODO: solve the following error
-""" 
-/home/i40/federicom/.local/lib/python3.8/site-packages/rpy2/robjects/pandas2ri.py:60: UserWarning: Error while trying to 
-convert the column "education". Fall back to string conversion. The error is:
-  warnings.warn('Error while trying to convert '
-"""
-
-"""!!! 
-Any iteration of RGLMME before 08.12 is falsely long-running. 
-Experiments should be re-run for those. So annoying. 
-
-"""
-
-
 import contextlib
 import datetime
 import itertools
@@ -31,13 +10,11 @@ import time
 import warnings
 
 from datetime import date
-from functools import reduce
-from glob import glob
-from importlib import reload
 from joblib import Parallel, delayed
 from lightgbm import LGBMClassifier, early_stopping
 from numpy.random import default_rng
 from openml.datasets import get_dataset
+from openml.exceptions import OpenMLServerException
 from rpy2.rinterface_lib.callbacks import logger as rpy2_logger
 from rpy2.robjects.packages import importr
 from sklearn.compose import ColumnTransformer
@@ -49,19 +26,11 @@ from tqdm import tqdm
 
 import src.utils as u
 import src.encoders as e
-
-reload(u)
-reload(e)
-
-# suppress any warning (from python AND R)
-rpy2_logger.setLevel(logging.ERROR)
-warnings.filterwarnings("ignore")
-
-np.random.seed(0)
+import src.config as cfg
 
 def main_loop(result_folder,
               dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring, index=0, num_exp=0,
-              n_splits=5, random_state=1444, timeout=3600*12):
+              n_splits=5, random_state=1444, timeout=6000):
     """
     output into logfile:
         0 : no computation
@@ -220,116 +189,68 @@ def main_loop(result_folder,
     return
 
 # ---- Execution
-
-# -- import R libraries
-rlibs = None
-random_state = 1
-
-dids = list(u.DATASETS_SMALL.values())
-
-std = [e.BinaryEncoder(), e.CatBoostEncoder(), e.CountEncoder(), e.DropEncoder(), e.MinHashEncoder(), e.OneHotEncoder(),
-       e.OrdinalEncoder(), e.RGLMMEncoder(rlibs=rlibs), e.SumEncoder(), e.TargetEncoder(), e.WOEEncoder()]
-cvglmm = [e.CVRegularized(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
-cvte = [e.CVRegularized(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
-buglmm = [e.CVBlowUp(e.RGLMMEncoder(rlibs=rlibs), n_splits=ns) for ns in [2, 5, 10]]
-bute = [e.CVBlowUp(e.TargetEncoder(), n_splits=ns) for ns in [2, 5, 10]]
-dte = [e.Discretized(e.TargetEncoder(), how="minmaxbins", n_bins=nb) for nb in [2, 5, 10]]
-binte = [e.PreBinned(e.TargetEncoder(), thr=thr) for thr in [1e-3, 1e-2, 1e-1]]
-me = [e.MeanEstimateEncoder(m=m) for m in [1e-1, 1, 10]]
-encoders = reduce(lambda x, y: x+y, [std, cvglmm, cvte, buglmm, bute, dte, binte, me])
-models = [
-    u.DecisionTreeClassifier(random_state=random_state+2),
-    u.SVC(random_state=random_state+4),
-    u.KNeighborsClassifier(),
-    u.LogisticRegression(max_iter=100, random_state=random_state+6, solver="lbfgs"),
-    u.LGBMClassifier(random_state=random_state+3, n_estimators=3000, metric="None"),
-]
-scorings = [u.accuracy_score, u.roc_auc_score, u.f1_score]
-scalers = [u.RobustScaler()]
-cat_imputers = [e.DFImputer(u.SimpleImputer(strategy="most_frequent"))]
-num_imputers = [e.DFImputer(u.SimpleImputer(strategy="median"))]
-
-kwargs = {
-    "n_splits": 5,
-    "random_state": random_state,
-    "timeout": 36000,
-}
-
 gbl_log = {
     "datetime": date.today().__str__(),
-    "arguments": kwargs,
-    "datasets": dids,
+    "arguments": cfg.PARAMETERS,
+    "datasets": cfg.DATASET_IDS["full tuning"],
     "failed_datasets": list(),
-    "encoders": [enc.__str__().split('(')[0] for enc in encoders],
-    "models": [m.__class__.__name__ for m in models],
-    "scorings": [s.__name__ for s in scorings],
+    "encoders": [enc.__str__().split('(')[0] for enc in cfg.ENCODERS],
+    "models": [m.__class__.__name__ for m in cfg.MODELS["full tuning"]],
+    "scorings": [s.__name__ for s in cfg.SCORINGS["full tuning"]],
 }
 
-test = True
-update_experiment = True
 if __name__ == "__main__":
-    experiment_name = "test" if not test else "___TEST___"
 
-    if update_experiment:
-        result_folder = os.path.join(u.RESULTS_DIR, experiment_name)
-    else:
-        same_name_exps = glob(os.path.join(u.RESULTS_DIR, f"{experiment_name}*"), recursive=False)
-        result_folder = os.path.join(u.RESULTS_DIR, f"{experiment_name}_{len(same_name_exps)}")
+    # -- Configure
+    rpy2_logger.setLevel(logging.ERROR)
+    warnings.filterwarnings("ignore")
+    os.environ.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', NUMEXPR_NUM_THREADS='1', MKL_NUM_THREADS='1')
+    np.random.seed(0)
+    gbl_log = {
+        "datetime": date.today().__str__(),
+        "arguments": cfg.PARAMETERS,
+        "datasets": cfg.DATASET_IDS["full tuning"],
+        "failed_datasets": list(),
+        "encoders": [enc.__str__().split('(')[0] for enc in cfg.ENCODERS],
+        "models": [m.__class__.__name__ for m in cfg.MODELS["full tuning"]],
+        "scorings": [s.__name__ for s in cfg.SCORINGS],
+    }
+
+    # -- Create directories
+    experiment_name = input("Enter the name of the experiment:\n> ")
+    result_dir = u.RESULTS_DIR / experiment_name
     try:
-        os.mkdir(result_folder)
-        os.mkdir(os.path.join(result_folder, "logs"))
+        os.mkdir(result_dir)
+        os.mkdir(result_dir / "logs")
     except FileExistsError:
         pass
 
-    print(f"Results are saved in {result_folder}")
-
-    # -- Testing?
-    if test:
-        ll = 80
-        print("=" * ll)
-        print('-' * int(ll / 2 - 2) + "Test" + '-' * int(ll / 2 - 2))
-        print("=" * ll)
-
-        tempdatasets = ["amazon_employee_access"]
-        dids = [u.DATASETS[x] for x in tempdatasets]
-        encoders = [e.Discretized(e.TargetEncoder()), e.TargetEncoder()]
-        models = [u.DecisionTreeClassifier(), u.KNeighborsClassifier()]
-        scorings = [u.roc_auc_score, u.accuracy_score]
-
-    # -- Load datasets
-    print("Preloading datasets")
-    datasets = []
-    for did in tqdm(dids):
-        try:
-            dataset = get_dataset(did)
-        except:
-            gbl_log["datasets"].remove(did)
-            gbl_log["failed_datasets"].append(did)
-        else:
-            datasets.append(dataset)
-
-    # -- Experiment
-    nj = 1 if test else -1
-
-    experiments = itertools.product(datasets, encoders, scalers, cat_imputers, num_imputers, models, scorings)
-    experiments = u.remove_concluded_runs(experiments, result_folder, repeat_unsuccessful=True) if not test else experiments
+    # -- Experiments: each experiment is identified by: (dataset, encoder, scaler, imputers, model, scoring)
+    experiments = itertools.product(cfg.DATASET_NAMES["full tuning"], cfg.ENCODERS,
+                                    cfg.SCALERS, cfg.IMPUTERS_CAT, cfg.IMPUTERS_NUM,
+                                    cfg.MODELS["full tuning"], cfg.SCORINGS)
+    experiments = u.remove_concluded_runs(experiments, result_dir, repeat_unsuccessful=False)
     experiments = u.smart_sort(experiments, random=True)
 
-    restart_count = 0
-    while len(experiments) > 0 and restart_count < 10:
+    # -- Load datasets
+    datasets = {}
+    for dname, did in tqdm(zip(cfg.DATASET_NAMES["full tuning"], cfg.DATASET_IDS["full tuning"])):
         try:
-            print(f"Running restart number {restart_count}.")
-            Parallel(n_jobs=nj, verbose=0)(
-                delayed(main_loop)(result_folder, dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring,
-                                   index=index, num_exp=len(experiments), **kwargs)
-                for (index, (dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring)) in
-                enumerate(experiments)
-            )
-        except Exception as error:
-            print(error)
-            restart_count += 1
-            experiments = u.remove_concluded_runs(experiments, result_folder)
-        else:
-            break
+            datasets[dname] = get_dataset(did)
+        except OpenMLServerException:
+            gbl_log["datasets"].remove(did)
+            gbl_log["failed_datasets"].append(did)
+
+    experiments = [
+        (datasets[dname], encoder, scaler, cat_imputer, num_imputer, model, scoring)
+        for (dname, encoder, scaler, cat_imputer, num_imputer, model, scoring) in experiments
+    ]
+
+    Parallel(n_jobs=-1, verbose=0)(
+        delayed(main_loop)(result_dir, dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring,
+                           index=index, num_exp=len(experiments), **cfg.PARAMETERS)
+        for (index, (dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring)) in
+        enumerate(experiments)
+    )
 
 

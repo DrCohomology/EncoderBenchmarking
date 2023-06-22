@@ -1,16 +1,7 @@
-# -*- coding: utf-8 -*-
-"""
-@author: Federico Matteucci
-
-This module imports and defines all of the encoders.
-"""
-
 import functools
-import glob
-import math
 import numpy as np
-import os
 import pandas as pd
+import rpy2.robjects as ro
 
 from category_encoders import (
     BackwardDifferenceEncoder,
@@ -30,18 +21,12 @@ from category_encoders import (
     WOEEncoder,
 )
 from collections import defaultdict
-from dirty_cat import (
-    MinHashEncoder,
-    SimilarityEncoder
-)
-from inspect import signature
-from sklearn.base import BaseEstimator, TransformerMixin, clone
-from sklearn.model_selection import StratifiedKFold
-
-import rpy2.robjects as ro
+from dirty_cat import MinHashEncoder
 from rpy2.robjects.packages import importr
 from rpy2.robjects import pandas2ri
 from rpy2.robjects.conversion import localconverter
+from sklearn.base import BaseEstimator, TransformerMixin, clone
+from sklearn.model_selection import StratifiedKFold
 
 import src.utils as u
 

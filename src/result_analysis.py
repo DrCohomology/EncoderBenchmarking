@@ -435,7 +435,7 @@ agg_agrworst.to_csv(u.RANKINGS_DIR / "pw_AGG_agrworst.csv")
 
 reload(u)
 
-aggsims = u.load_agg_similarities()
+aggsims = u.load_AGG_similarity_dataframes()
 agg_taub = aggsims["pw_AGG_kendall_tau_b_nan=omit.csv"]
 agg_ptaub = aggsims["pw_AGG_kendall_tau_b_p_nan=omit.csv"]
 agg_rho = aggsims["pw_AGG_spearman_rho_nan=omit.csv"]
@@ -456,7 +456,7 @@ for similarity in similarities:
 
 reload(u)
 
-aggsims = u.load_agg_similarities()
+aggsims = u.load_AGG_similarity_dataframes()
 agg_taub = aggsims["pw_AGG_kendall_tau_b_nan=omit.csv"]
 agg_ptaub = aggsims["pw_AGG_kendall_tau_b_p_nan=omit.csv"]
 agg_rho = aggsims["pw_AGG_spearman_rho_nan=omit.csv"]
@@ -477,7 +477,7 @@ u.heatmap_longformat_multisim(df_sim, ["rho", "agrbest"], "interpretation", font
 
 # %% 3d1. Average similarity
 
-aggsims = u.load_agg_similarities()
+aggsims = u.load_AGG_similarity_dataframes()
 agg_taub = aggsims["pw_AGG_kendall_tau_b_nan=omit.csv"]
 agg_ptaub = aggsims["pw_AGG_kendall_tau_b_p_nan=omit.csv"]
 agg_rho = aggsims["pw_AGG_spearman_rho_nan=omit.csv"]

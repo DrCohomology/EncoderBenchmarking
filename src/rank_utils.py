@@ -50,7 +50,7 @@ class BaseAggregator(object):
             "thrbest quality": self._aggr_qual_thrbest,
             "rescaled mean quality": self._aggr_qual_rescaled_mean,
         }
-        # True if low = better (i.e., if it behaves like a rank function)
+        # True if low = better (i.e., if it behaves like a ranking)
         self.increasing = {
             "rank_mean": True,
             "rank_median": True,
@@ -309,51 +309,6 @@ def kemeny_aggregation_gurobi_ties(rf: pd.DataFrame, **solver_params):
     return rlu.mat2rf(median.X, alternatives=rf.index)
 
 
-def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5), repetitions=100, append_to_existing=True, save=True):
-    df_ = df.query("tuning == @tuning")
-    rf_ = rf.loc(axis=1)[:, :, tuning, :].copy()
-
-    if append_to_existing:
-        sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
-    else:
-        sample_df_sim = pd.DataFrame()
-
-    # whenever we add experiments, start from the value of seed
-    mat_corrs = []
-    sample_aggregators = defaultdict(lambda: [])
-    for sample_size in tqdm(sample_sizes):
-        inner_mat_corrs = []
-        inner_sample_aggregators = []
-        for _ in tqdm(range(repetitions)):
-            seed += 1
-            a = SampleAggregator(df_, rf_, sample_size, seed=seed, bootstrap=True).aggregate(
-                ignore_strategies=["kemeny rank"],
-                verbose=False)
-
-            tmp_jaccard, tmp_rho = u.pairwise_similarity_wide_format(a.aggrf,
-                                                                     simfuncs=[rm.jaccard_best,
-                                                                               rm.spearman_rho])
-            agg_sample_long = u.join_wide2long(dict(zip(["jaccard", "rho"],
-                                                        [tmp_jaccard, tmp_rho])),
-                                               comparison_level="sample")
-
-            inner_mat_corrs.append(agg_sample_long.assign(sample_size=sample_size).query("sample_1 < sample_2"))
-            sample_aggregators[sample_size].append(a)
-        mat_corrs.append(pd.concat(inner_mat_corrs, axis=0))
-    # if mat_corr is already defined, make it bigger! We are adding experiments
-    mat_corr = pd.concat(mat_corrs, axis=0)
-    mat_corr = mat_corr.join(
-        mat_corr.groupby(["aggregation", "sample_size"])[["jaccard", "rho"]].std(),
-        on=["aggregation", "sample_size"], rsuffix="_std")
-    sample_df_sim = pd.concat([sample_df_sim, mat_corr], axis=0)
-
-    # rename to AGGREGATION_NAMES but allow correctly formatted names
-    sample_df_sim.aggregation = sample_df_sim.aggregation.map(lambda x: defaultdict(lambda: x, u.AGGREGATION_NAMES)[x])
-
-    if save:
-        sample_df_sim.to_csv(u.RANKINGS_DIR / f"sample_sim_{tuning}.csv", index=False)
-
-
 # def kemeny_aggregation_cvxpy(dr, solver=cp.GUROBI, consensus_kind="total_order", solver_opts=None):
 #     """
 #     Returns the median consensus according to the symmetric distance. See Hornik and Meyer (2007).
@@ -380,3 +335,57 @@ def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5),
 #     p.solve(solver=solver, solver_opts=solver_opts)
 #
 #     return mat2rf(np.array(median.value, dtype=int), alternatives=dr.index, kind="incidence")
+
+
+def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5), repetitions=100,
+                           append_to_existing=True, save=True, bootstrap=False):
+    """
+    Run the replicability analysis. Sample two disjoint sets of datasets from df.dataset.unique(), aggregate results
+        across the two samples separately, then compare the aggregated rankings.
+    bootstrap is used ONLY IF n_samples*sample_size > len(S), in which case the sampled subsets of datasets are
+        bootstrapped.
+    """
+    df_ = df.query("tuning == @tuning")
+    rf_ = rf.loc(axis=1)[:, :, tuning, :].copy()
+
+    if append_to_existing:
+        sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
+    else:
+        sample_df_sim = pd.DataFrame()
+
+    # whenever we add experiments, start from the value of seed
+    mat_corrs = []
+    sample_aggregators = defaultdict(lambda: [])
+    for sample_size in tqdm(sample_sizes):
+        inner_mat_corrs = []
+        for _ in tqdm(range(repetitions)):
+            seed += 1
+            a = SampleAggregator(df_, rf_, sample_size, seed=seed, bootstrap=bootstrap).aggregate(
+                ignore_strategies=["kemeny rank"],
+                verbose=False)
+
+            tmp_jaccard, tmp_rho = u.pairwise_similarity_wide_format(a.aggrf,
+                                                                     simfuncs=[rm.jaccard_best,
+                                                                               rm.spearman_rho])
+            agg_sample_long = u.join_wide2long(dict(zip(["jaccard", "rho"],
+                                                        [tmp_jaccard, tmp_rho])),
+                                               comparison_level="sample")
+
+            inner_mat_corrs.append(agg_sample_long.assign(sample_size=sample_size).query("sample_1 < sample_2"))
+            sample_aggregators[sample_size].append(a)
+        mat_corrs.append(pd.concat(inner_mat_corrs, axis=0))
+    # if mat_corr is already defined, make it bigger! We are adding experiments
+    mat_corr = pd.concat(mat_corrs, axis=0)
+    mat_corr = mat_corr.join(
+        mat_corr.groupby(["aggregation", "sample_size"])[["jaccard", "rho"]].std(),
+        on=["aggregation", "sample_size"], rsuffix="_std")
+    sample_df_sim = pd.concat([sample_df_sim, mat_corr], axis=0)
+
+    # rename to AGGREGATION_NAMES but allow correctly formatted names
+    sample_df_sim.aggregation = sample_df_sim.aggregation.map(lambda x: defaultdict(lambda: x, u.AGGREGATION_NAMES)[x])
+
+    if save:
+        sample_df_sim.to_parquet(u.RANKINGS_DIR / f"sample_sim_{tuning}.parquet")
+
+
+

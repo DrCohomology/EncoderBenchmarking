@@ -218,7 +218,7 @@ if __name__ == "__main__":
     }
 
     # -- Create directories
-    experiment_name = input("Enter the name of the experiment:\n> ")
+    experiment_name = "full tuning"
     result_dir = u.RESULTS_DIR / experiment_name
     try:
         os.mkdir(result_dir)

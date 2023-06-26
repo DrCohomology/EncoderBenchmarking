@@ -1,12 +1,6 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Feb 21 10:29:35 2022
-
-@author: federicom
-"""
-
 import contextlib
 import glob
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -47,8 +41,8 @@ from sklearn.tree import DecisionTreeClassifier
 # ----
 
 # --- Directories
-BASE_DIR = Path(r"C:\Data\EncoderBenchmarking_results")
-RESULTS_DIR = BASE_DIR / "ExperimentalResults"
+BASE_DIR = Path(".")
+RESULTS_DIR = BASE_DIR / "experimental_results"
 RANKINGS_DIR = BASE_DIR / "Rankings"
 SENSITIVITY_DIR = BASE_DIR / "Sensitivity"
 FIGURES_DIR = BASE_DIR / "Figures"
@@ -56,56 +50,60 @@ TMP_DIR = BASE_DIR / "tmp"
 
 # --- Datasets
 DATASETS = MappingProxyType({
-    'kr-vs-kp': 3,                                                  # https://archive.ics.uci.edu/dataset/22/chess+king+rook+vs+king+pawn
-    'credit-approval': 29,                                          # http://archive.ics.uci.edu/dataset/27/credit+approval
-    'credit-g': 31,                                                 # https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
-    'sick': 38,                                                     # http://archive.ics.uci.edu/dataset/102/thyroid+disease
-    'tic-tac-toe': 50,                                              # http://archive.ics.uci.edu/dataset/101/tic+tac+toe+endgame
-    'heart-h': 51,                                                  # https://archive.ics.uci.edu/dataset/45/heart+disease
-    'vote': 56,                                                     # https://archive.ics.uci.edu/dataset/105/congressional+voting+records
-    'monks-problems-1': 333,                                        # https://archive.ics.uci.edu/dataset/70/monk+s+problems
-    'monks-problems-2': 334,                                        # https://archive.ics.uci.edu/dataset/70/monk+s+problems
-    'irish': 451,                                                   # http://lib.stat.cmu.edu/datasets/irish.ed
-    'profb': 470,                                                   # http://lib.stat.cmu.edu/datasets/profb
-    'mv': 881,                                                      # https://www.openml.org/search?type=data&status=active&id=881
-    'molecular-biology_promoters': 956,                             # https://archive.ics.uci.edu/dataset/67/molecular+biology+promoter+gene+sequences
-    'nursery': 959,                                                 # https://www.openml.org/search?type=data&status=active&id=26
-    'kdd_internet_usage': 981,                                      # https://www.openml.org/search?type=data&status=active&id=4133
-    'ada_prior': 1037,                                              # https://www.agnostic.inf.ethz.ch/datasets.php
-    'KDDCup09_appetency': 1111,                                     # https://www.openml.org/search?type=data&status=active&id=1111&sort=runs
-    'KDDCup09_churn': 1112,                                         # https://www.openml.org/search?type=data&status=active&id=1112&sort=runs
-    'KDDCup09_upselling': 1114,                                     # https://www.openml.org/search?type=data&status=active&id=1114
-    'airlines': 1169,                                               # https://www.openml.org/search?type=data&status=active&id=1169
-    'Agrawal1': 1235,                                               # https://www.openml.org/search?type=data&status=active&id=1235
-    'bank-marketing': 1461,                                         # https://archive.ics.uci.edu/dataset/222/bank+marketing
-    'blogger': 1463,                                                # https://www.ijcaonline.org/archives/volume47/number18/7291-0509
-    'nomao': 1486,                                                  # https://archive.ics.uci.edu/dataset/227/nomao
-    'thoracic-surgery': 1506,                                       # https://www.openml.org/search?type=data&status=active&id=1506
-    'wholesale-customers': 1511,                                    # https://www.openml.org/search?type=data&status=active&id=1511
-    'adult': 1590,                                                  # https://www.openml.org/search?type=data&status=active&id=1590
-    'amazon_employee_access': 43900,  #4135                               # https://www.kaggle.com/competitions/amazon-employee-access-challenge/data
-    'cylinder-bands': 6332,                                         # https://archive.ics.uci.edu/dataset/32/cylinder+bands
-    'dresses-sales': 23381,                                         # https://archive.ics.uci.edu/dataset/289/dresses+attribute+sales
-    'SpeedDating': 40536,                                           # https://www.openml.org/search?type=data&status=active&id=40536
-    'Titanic': 40945,                                               # https://www.openml.org/search?type=data&status=active&id=40945
-    'Australian': 40981,                                            # https://archive.ics.uci.edu/dataset/143/statlog+australian+credit+approval
-    'jungle_chess_2pcs_endgame_elephant_elephant': 40999,           # https://www.openml.org/search?type=data&status=active&id=40999
-    'jungle_chess_2pcs_endgame_rat_rat': 41005,                     # https://www.openml.org/search?type=data&status=active&id=41005
-    'jungle_chess_2pcs_endgame_lion_lion': 41007,                   # https://www.openml.org/search?type=data&status=active&id=41007
-    'kick': 41162,                                                  # https://www.openml.org/search?type=data&status=active&id=41162
-    'porto-seguro': 41224,                                          # https://www.kaggle.com/competitions/porto-seguro-safe-driver-prediction
-    'telco-customer-churn': 42178,                                  # https://www.kaggle.com/datasets/blastchar/telco-customer-churn/discussion
-    'KDD98': 42343,                                                 # https://kdd.ics.uci.edu/databases/kddcup98/kddcup98.html
-    'sf-police-incidents': 42344,                                   # https://www.openml.org/search?type=data&status=active&id=42344
-    'open_payments': 42738,                                         # https://www.openml.org/search?type=data&status=active&id=42738
-    'Census-Income-KDD': 42750,                                     # https://www.openml.org/search?type=data&status=active&id=42750
-    'students_scores': 43098,                                       # https://www.openml.org/search?type=data&status=active&id=43098
-    'WMO-Hurricane-Survival-Dataset': 43607,                        # https://www.openml.org/search?type=data&status=active&id=43607
-    'law-school-admission-bianry': 43890,                           # https://www.openml.org/search?type=data&status=active&id=43890
-    'national-longitudinal-survey-binary': 43892,                   # https://www.openml.org/search?type=data&status=active&id=43892
-    'ibm-employee-attrition': 43896,                                # https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
-    'ibm-employee-performance': 43897,                              # https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
-    'mushroom': 43922                                               # https://www.openml.org/search?type=data&status=active&id=24
+    'kr-vs-kp': 3,  # https://archive.ics.uci.edu/dataset/22/chess+king+rook+vs+king+pawn
+    'credit-approval': 29,  # http://archive.ics.uci.edu/dataset/27/credit+approval
+    'credit-g': 31,  # https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
+    'sick': 38,  # http://archive.ics.uci.edu/dataset/102/thyroid+disease
+    'tic-tac-toe': 50,  # http://archive.ics.uci.edu/dataset/101/tic+tac+toe+endgame
+    'heart-h': 51,  # https://archive.ics.uci.edu/dataset/45/heart+disease
+    'vote': 56,  # https://archive.ics.uci.edu/dataset/105/congressional+voting+records
+    'monks-problems-1': 333,  # https://archive.ics.uci.edu/dataset/70/monk+s+problems
+    'monks-problems-2': 334,  # https://archive.ics.uci.edu/dataset/70/monk+s+problems
+    'irish': 451,  # http://lib.stat.cmu.edu/datasets/irish.ed
+    'profb': 470,  # http://lib.stat.cmu.edu/datasets/profb
+    'mv': 881,  # https://www.openml.org/search?type=data&status=active&id=881
+    'molecular-biology_promoters': 956,
+    # https://archive.ics.uci.edu/dataset/67/molecular+biology+promoter+gene+sequences
+    'nursery': 959,  # https://www.openml.org/search?type=data&status=active&id=26
+    'kdd_internet_usage': 981,  # https://www.openml.org/search?type=data&status=active&id=4133
+    'ada_prior': 1037,  # https://www.agnostic.inf.ethz.ch/datasets.php
+    'KDDCup09_appetency': 1111,  # https://www.openml.org/search?type=data&status=active&id=1111&sort=runs
+    'KDDCup09_churn': 1112,  # https://www.openml.org/search?type=data&status=active&id=1112&sort=runs
+    'KDDCup09_upselling': 1114,  # https://www.openml.org/search?type=data&status=active&id=1114
+    'airlines': 1169,  # https://www.openml.org/search?type=data&status=active&id=1169
+    'Agrawal1': 1235,  # https://www.openml.org/search?type=data&status=active&id=1235
+    'bank-marketing': 1461,  # https://archive.ics.uci.edu/dataset/222/bank+marketing
+    'blogger': 1463,  # https://www.ijcaonline.org/archives/volume47/number18/7291-0509
+    'nomao': 1486,  # https://archive.ics.uci.edu/dataset/227/nomao
+    'thoracic-surgery': 1506,  # https://www.openml.org/search?type=data&status=active&id=1506
+    'wholesale-customers': 1511,  # https://www.openml.org/search?type=data&status=active&id=1511
+    'adult': 1590,  # https://www.openml.org/search?type=data&status=active&id=1590
+    'amazon_employee_access': 43900,
+    # 4135                               # https://www.kaggle.com/competitions/amazon-employee-access-challenge/data
+    'cylinder-bands': 6332,  # https://archive.ics.uci.edu/dataset/32/cylinder+bands
+    'dresses-sales': 23381,  # https://archive.ics.uci.edu/dataset/289/dresses+attribute+sales
+    'SpeedDating': 40536,  # https://www.openml.org/search?type=data&status=active&id=40536
+    'Titanic': 40945,  # https://www.openml.org/search?type=data&status=active&id=40945
+    'Australian': 40981,  # https://archive.ics.uci.edu/dataset/143/statlog+australian+credit+approval
+    'jungle_chess_2pcs_endgame_elephant_elephant': 40999,
+    # https://www.openml.org/search?type=data&status=active&id=40999
+    'jungle_chess_2pcs_endgame_rat_rat': 41005,  # https://www.openml.org/search?type=data&status=active&id=41005
+    'jungle_chess_2pcs_endgame_lion_lion': 41007,  # https://www.openml.org/search?type=data&status=active&id=41007
+    'kick': 41162,  # https://www.openml.org/search?type=data&status=active&id=41162
+    'porto-seguro': 41224,  # https://www.kaggle.com/competitions/porto-seguro-safe-driver-prediction
+    'telco-customer-churn': 42178,  # https://www.kaggle.com/datasets/blastchar/telco-customer-churn/discussion
+    'KDD98': 42343,  # https://kdd.ics.uci.edu/databases/kddcup98/kddcup98.html
+    'sf-police-incidents': 42344,  # https://www.openml.org/search?type=data&status=active&id=42344
+    'open_payments': 42738,  # https://www.openml.org/search?type=data&status=active&id=42738
+    'Census-Income-KDD': 42750,  # https://www.openml.org/search?type=data&status=active&id=42750
+    'students_scores': 43098,  # https://www.openml.org/search?type=data&status=active&id=43098
+    'WMO-Hurricane-Survival-Dataset': 43607,  # https://www.openml.org/search?type=data&status=active&id=43607
+    'law-school-admission-bianry': 43890,  # https://www.openml.org/search?type=data&status=active&id=43890
+    'national-longitudinal-survey-binary': 43892,  # https://www.openml.org/search?type=data&status=active&id=43892
+    'ibm-employee-attrition': 43896,  # https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
+    'ibm-employee-performance': 43897,
+    # https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
+    'mushroom': 43922  # https://www.openml.org/search?type=data&status=active&id=24
 })
 DATASETS_SMALL = MappingProxyType({
     'kr-vs-kp': 3,
@@ -138,58 +136,6 @@ DATASETS_SMALL = MappingProxyType({
     'ibm-employee-attrition': 43896,
     'ibm-employee-performance': 43897,
     'mushroom': 43922
-})
-LEFT_DATASETS = MappingProxyType({
-    # 'kr-vs-kp': 3,
-    # 'credit-approval': 29,
-    # 'credit-g': 31,
-    # 'sick': 38,
-    # 'tictactoe': 50,
-    # 'heart-h': 51, PROBLEMATIC
-    # 'vote': 56,
-    # 'monks-problems-1': 333,
-    # 'monks-problems-2': 334,
-    # 'irish': 451,
-    # 'profb': 470,
-    # 'mv': 881,
-    # 'molecular_biology_promoters': 956,
-    # 'nursery': 959, PROBLEMATIC
-    # 'kdd_internet_usage': 981,
-    # 'ada_prior': 1037,
-    'KDDCup09_appetency': 1111,
-    'KDDCup09_churn': 1112,
-    'KDDCup09_upselling': 1114,
-    'airlines': 1169,
-    'Agrawal1': 1235,
-    'bank_marketing': 1461,
-    # 'blogger': 1463,
-    'nomao': 1486,
-    # 'thoracic-surgery': 1506,
-    # 'wholesale-customers': 1511,
-    'adult': 1590,
-    # 'cylinder-bands': 6332,
-    # 'dresses-sales': 23381,
-    # 'SpeedDating': 40536,
-    # 'titanic': 40945, PROBLEMATIC
-    # 'Australian': 40981,
-    # 'jungle_chess_2pcs_endgame_elephant_elephant': 40999,
-    # 'jungle_chess_2pcs_endgame_rat_rat': 41005,
-    # 'jungle_chess_2pcs_endgame_lion_lion': 41007,
-    'kick': 41162,
-    'porto_seguro': 41224,
-    'churn': 42178,
-    'KDD98': 42343,
-    'sf-police-incidents': 42344,
-    'open_payments': 42738,
-    'Census-Income-KDD': 42750,
-    # 'students_scores': 43098,
-    'WMO-Hurricane-Survival-Dataset': 43607,
-    # 'law-school-admission-bianry': 43890, PROBLEMATIC
-    # 'national-longitudinal-survey-binary': 43892,
-    # 'ibm-employee-attrition': 43896,
-    # 'ibm-employee-performance': 43897,
-    'amazon_employee_access': 43900,
-    # 'mushroom': 43922
 })
 
 # --- Better names
@@ -279,7 +225,8 @@ FACTOR_LATEX = MappingProxyType({
         "KNC": "k-NN",
         "LGBMC": "LGBM",
         "LR": "LogReg",
-        "SVC": "SVM"
+        "SVC": "SVM",
+        None: "all"
     }),
     "tuning": MappingProxyType({
         "full": "full",
@@ -349,7 +296,7 @@ def get_disjoint_samples(S,
     n_samples is the number of disjoint subsets of S to return
     sample_size is the number of items in each sample
     seed is the temporary numpy random seed
-    bootstrap is used ONLY IF n_samples*sample_size > len(S)
+    bootstrap is used ONLY IF n_samples*sample_size > len(S), in which case the sampled subsets of datasets are bootstrapped
     """
     if n_samples * sample_size > len(S):
         if not bootstrap:
@@ -785,14 +732,14 @@ def load_df() -> pd.DataFrame:
     """
     Load evaluations dataframe from hard-coded path
     """
-    return pd.read_csv(RESULTS_DIR / "final.csv")
+    return pd.read_parquet(RESULTS_DIR / "results.parquet")
 
 
 def load_rf() -> pd.DataFrame:
     """
     Load rank functions from hard-coded path
     """
-    return pd.read_csv(RANKINGS_DIR / "rank_function_from_average_cv_score.csv", index_col=0, header=[0, 1, 2, 3])
+    return pd.read_parquet(RESULTS_DIR / "rankings.parquet")
 
 
 def load_df_rf() -> Tuple[pd.DataFrame, ...]:
@@ -803,19 +750,17 @@ def load_aggrf() -> pd.DataFrame:
     """
     Load dataframe of aggregate rankings from hard-coded path
     """
-
-    return pd.read_csv(RANKINGS_DIR / "consensuses.csv", index_col=0,
-                       header=[0, 1, 2, 3])
+    return pd.read_parquet(RESULTS_DIR / "consensuses.parquet")
 
 
-def load_agg_similarities() -> dict[str, pd.DataFrame]:
+def load_aggregated_similarity_dataframes() -> dict:
     """
     Loads similarity between aggregations dataframes in wide format.
     The output dict format is "filename : dataframe"
     """
     out = {}
-    for path in glob.glob(str(RANKINGS_DIR / "pw_AGG*.csv")):
-        out[Path(path).name] = pd.read_csv(path, index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
+    for path in glob.glob(str(RESULTS_DIR / "pw_AGG*.parquet")):
+        out[Path(path).stem] = pd.read_parquet(path)
     return out
 
 
@@ -829,24 +774,24 @@ def load_similarity_dataframes() -> dict:
 
     out = {}
     # filter out aggregated rankings
-    for path in set(glob.glob(str(RANKINGS_DIR / "pw*.csv"))) - set(glob.glob(str(RANKINGS_DIR / "pw_AGG*.csv"))):
-        tmp = pd.read_csv(path, index_col=[0, 1, 2, 3], header=[0, 1, 2, 3])
+    for path in set(glob.glob(str(RESULTS_DIR / "pw*.parquet"))) - set(glob.glob(str(RESULTS_DIR / "pw_AGG*.parquet"))):
+        tmp = pd.read_parquet(path)
         try:
             tmp.index = tmp.index.astype(object).rename(["dataset", "model", "tuning", "scoring"])
             tmp.columns = tmp.columns.astype(object).rename(["dataset", "model", "tuning", "scoring"])
         except ValueError:
             continue
         else:
-            out[Path(path).name] = tmp
+            out[Path(path).stem] = tmp
 
     return out
 
 
 def load_sample_similarity_dataframe(tuning) -> pd.DataFrame:
     try:
-        return pd.read_csv(RANKINGS_DIR / f"sample_sim_{tuning}.csv")
+        return pd.read_parquet(RESULTS_DIR / f"sample_df_sim_{tuning}.parquet")
     except FileNotFoundError:
-        print(f"'sample_sim_{tuning}.csv' not found in {RANKINGS_DIR}.")
+        print(f"'sample_sim_{tuning}.parquet' not found in {RESULTS_DIR}.")
         return pd.DataFrame()
 
 
@@ -1192,7 +1137,6 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
     #     elif comparison_level in ["model", "aggregation"]:
     #         ax.set_title(title, fontsize=9)
 
-
     sns.despine()
     plt.tight_layout(pad=0.5)
 
@@ -1246,8 +1190,6 @@ def lineplot_longformat_sample_sim(df_sim, similarity,
             ax.set_yticks([0.0, 0.1, 0.3, 0.5])
             ax.set_ylim((0, 0.51))
 
-
-
         ax.set_xticks(df_sim["sample size"].unique())
 
     ax.set_ylabel(SIMILARITY_LATEX[similarity])
@@ -1298,3 +1240,124 @@ def boxplots_longformat_sample_sim(df_sim, similarity,
     if save_plot:
         fig.savefig(FIGURES_DIR / f"boxplot_sample_{hue}_{similarity}.pdf", dpi=600)
         print(f"Saved figure in {FIGURES_DIR}/boxplot_sample_{hue}_{similarity}.pdf")
+
+
+def lineplot_replicability(hue="model", show=True):
+    """
+    Load and plot sample_df_sim for different tuning strategies in a 2x3 matrix of plots.
+    """
+
+    if hue not in ["model", "aggregation", "scoring"]:
+        raise ValueError(f"{hue} is an invalid value for hue. Valid values are 'model', 'aggregation', 'scoring'")
+
+    sns.set(font_scale=0.8)
+    sns.set_style("ticks")
+    mpl.rcParams['text.usetex'] = True
+    mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+    mpl.rc('font', family='Times New Roman')
+
+    fig = plt.figure(figsize=(5.5, 3))
+    gs = fig.add_gridspec(2, 3)
+
+    for isim, sim in enumerate(["rho", "jaccard"]):
+        for itun, tuning in enumerate(["no", "model", "full"]):
+            sample_df_sim = load_sample_similarity_dataframe(tuning=tuning)
+
+            xb = (sim == "jaccard")
+            yl = (tuning == "no")
+
+            with sns.axes_style("ticks", {"xtick.bottom": True, "ytick.left": True}):
+                ax = fig.add_subplot(gs[isim, itun])
+
+                lineplot_longformat_sample_sim(sample_df_sim, similarity=sim, save_plot=False, show_plot=False,
+                                               hue=hue,
+                                               estimator="mean",
+                                               ax=ax,
+                                               )
+                ax.set_xticks(sample_df_sim.sample_size.unique())
+
+                if hue == "model":
+                    if sim == "rho":
+                        ax.set_yticks([0, 0.2, 0.4, 0.6])
+                    elif sim == "jaccard":
+                        ax.set_yticks([0, 0.1, 0.3, 0.5])
+                if hue == "aggregation":
+                    if sim == "rho":
+                        ax.set_yticks([0, 0.25, 0.5, 0.75])
+                    elif sim == "jaccard":
+                        ax.set_yticks([0, 0.3, 0.6, 0.9])
+
+
+            if not xb:
+                ax.set_xlabel(None)
+                ax.set_xticklabels([])
+            if not yl:
+                ax.set_ylabel(None)
+                ax.set_yticklabels([])
+
+            ax.grid(axis="y", zorder=-1, linewidth=0.4)
+
+            if tuning == "no":
+                handles, labels = ax.get_legend_handles_labels()
+
+            ax.legend().remove()
+
+            if sim == "rho":
+                ax.set_title(f"{tuning} tuning")
+
+        plt.tight_layout(w_pad=3, h_pad=1)
+
+        if hue == "model":
+            plt.subplots_adjust(top=0.86)
+            plt.figlegend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.86 + 0.02, 1, 0.2),
+                          loc="lower left", mode="expand", borderaxespad=1, ncol=5, frameon=False)
+        elif hue == "aggregation":
+            plt.subplots_adjust(top=0.8)
+            plt.figlegend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.8 + 0.02, 1, 0.2),
+                          loc="lower left", mode="expand", borderaxespad=1, ncol=5, frameon=False)
+        elif hue == "scoring":
+            plt.subplots_adjust(top=0.86)
+            plt.figlegend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.86 + 0.02, 1, 0.2),
+                          loc="lower center", borderaxespad=1, ncol=3, frameon=False)
+
+    sns.despine(trim=True)
+    if show:
+        plt.show()
+
+
+def boxplot_encoder_ranks(rf, ax, model=None):
+    if model is not None:
+        rf = rf.loc(axis=1)[:, model, :, :]
+
+    rf_melt = rf.melt(ignore_index=False).reset_index()
+    rf_melt.columns = ["encoder", "dataset", "model", "tuning", "scoring", "rank"]
+    rf_melt.encoder = rf_melt.encoder.map(ENCODER_LATEX)
+
+    sns.set(font_scale=0.8)
+    sns.set_style("ticks", {"ytick.left": False})
+    mpl.rcParams['text.usetex'] = True
+    mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+    mpl.rc('font', family='Times New Roman')
+
+    ax = sorted_boxplot_horizontal(data=rf_melt, y="encoder", x="rank", order_by="mean",
+                                     # palette=sns.light_palette("grey", n_colors=len(rf.index)),
+                                     color="lightgrey",
+                                     showfliers=False,
+                                     linewidth=1, showcaps=False,
+                                     showmeans=True,
+                                     meanprops={"marker": "o",
+                                                "markeredgecolor": "red",
+                                                "markersize": 2},
+                                     medianprops={"linestyle": "-"
+                                                  },
+                                     ax=ax)
+    ax.set(xlabel=None, ylabel=None)
+    ax.set_xlim(0, 32)
+    ax.set_xticks([0, 10, 20, 30])
+    ax.grid(axis="x", zorder=-1, linewidth=0.4)
+
+
+
+
+
+

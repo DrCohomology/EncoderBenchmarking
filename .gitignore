@@ -1,6 +1,7 @@
 # python files
 result_analysis.py
 utils_backup.py
+test.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1185,12 +1185,12 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
         fontsize=fontsize
     )
 
-    if title is not None:
-        if comparison_level in ["tuning", "scoring"]:
-            plt.subplots_adjust(left=adjust_left, right=adjust_right)
-            ax.set_title(title, x=tx, y=ty, fontsize=fontsize+1)
-        elif comparison_level in ["model", "aggregation"]:
-            ax.set_title(title, fontsize=9)
+    # if title is not None:
+    #     if comparison_level in ["tuning", "scoring"]:
+    #         plt.subplots_adjust(left=adjust_left, right=adjust_right)
+    #         ax.set_title(title, x=tx, y=ty, fontsize=fontsize+1)
+    #     elif comparison_level in ["model", "aggregation"]:
+    #         ax.set_title(title, fontsize=9)
 
 
     sns.despine()

@@ -131,6 +131,7 @@ env.bak/
 venv.bak/
 venv39.bak/
 requirements39.txt
+result_analysis.py
 
 # Spyder project settings
 .spyderproject

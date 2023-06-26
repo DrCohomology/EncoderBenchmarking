@@ -28,7 +28,8 @@ import src.utils as u
 import src.encoders as e
 import src.config as cfg
 
-def main_loop(result_folder,
+
+def main_loop(result_dir,
               dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring, index=0, num_exp=0,
               n_splits=5, random_state=1444, timeout=6000):
     """
@@ -174,13 +175,13 @@ def main_loop(result_folder,
     # if no Exception was raised -> success
     if exec_log["exit_status"] == 0:
         saveset_name = exp_name + ".csv"
-        saveset.to_csv(os.path.join(result_folder, saveset_name))
+        saveset.to_csv(os.path.join(result_dir, saveset_name))
         exec_log["exit_status"] = 1
 
-    # remove default time-out log
+    # dump exec_log
     log_name = f'{exec_log["exit_status"]}_{exp_name}.json'
     try:
-        with open(os.path.join(result_folder, "logs", log_name), "w") as fw:
+        with open(os.path.join(result_dir, "logs", log_name), "w") as fw:
             json.dump(exec_log, fw)
     except Exception as log_error:
         exec_log["log_error_message"] = str(log_error)

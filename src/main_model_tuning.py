@@ -28,7 +28,7 @@ import src.config as cfg
 
 def main_loop(result_folder,
               dataset, encoder, scaler, cat_imputer, num_imputer, models=tuple(), scorings=tuple(), index=0, num_exp=0,
-              n_splits=5, random_state=1, timeout=6000):
+              n_splits=5, timeout=6000):
     """
     output into logfile:
         0 : no computation

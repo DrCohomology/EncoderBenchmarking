@@ -1,20 +1,20 @@
 """
 Comparison and ranking utilities
 """
-
 import gurobipy as gp
 import numpy as np
 import pandas as pd
 
+from collections import defaultdict
 from pathlib import Path
 from scipy.stats import iqr
 from scikit_posthocs import posthoc_nemenyi_friedman
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from typing import Iterable, Union
 
 import src.utils as u
 import src.relation_utils as rlu
-
+import src.rank_metrics as rm
 
 class BaseAggregator(object):
     """
@@ -307,3 +307,76 @@ def kemeny_aggregation_gurobi_ties(rf: pd.DataFrame, **solver_params):
     model.optimize()
 
     return rlu.mat2rf(median.X, alternatives=rf.index)
+
+
+def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5), repetitions=100, append_to_existing=True, save=True):
+    df_ = df.query("tuning == @tuning")
+    rf_ = rf.loc(axis=1)[:, :, tuning, :].copy()
+
+    if append_to_existing:
+        sample_df_sim = u.load_sample_similarity_dataframe(tuning=tuning)
+    else:
+        sample_df_sim = pd.DataFrame()
+
+    # whenever we add experiments, start from the value of seed
+    mat_corrs = []
+    sample_aggregators = defaultdict(lambda: [])
+    for sample_size in tqdm(sample_sizes):
+        inner_mat_corrs = []
+        inner_sample_aggregators = []
+        for _ in tqdm(range(repetitions)):
+            seed += 1
+            a = SampleAggregator(df_, rf_, sample_size, seed=seed, bootstrap=True).aggregate(
+                ignore_strategies=["kemeny rank"],
+                verbose=False)
+
+            tmp_jaccard, tmp_rho = u.pairwise_similarity_wide_format(a.aggrf,
+                                                                     simfuncs=[rm.jaccard_best,
+                                                                               rm.spearman_rho])
+            agg_sample_long = u.join_wide2long(dict(zip(["jaccard", "rho"],
+                                                        [tmp_jaccard, tmp_rho])),
+                                               comparison_level="sample")
+
+            inner_mat_corrs.append(agg_sample_long.assign(sample_size=sample_size).query("sample_1 < sample_2"))
+            sample_aggregators[sample_size].append(a)
+        mat_corrs.append(pd.concat(inner_mat_corrs, axis=0))
+    # if mat_corr is already defined, make it bigger! We are adding experiments
+    mat_corr = pd.concat(mat_corrs, axis=0)
+    mat_corr = mat_corr.join(
+        mat_corr.groupby(["aggregation", "sample_size"])[["jaccard", "rho"]].std(),
+        on=["aggregation", "sample_size"], rsuffix="_std")
+    sample_df_sim = pd.concat([sample_df_sim, mat_corr], axis=0)
+
+    # rename to AGGREGATION_NAMES but allow correctly formatted names
+    sample_df_sim.aggregation = sample_df_sim.aggregation.map(lambda x: defaultdict(lambda: x, u.AGGREGATION_NAMES)[x])
+
+    if save:
+        sample_df_sim.to_csv(u.RANKINGS_DIR / f"sample_sim_{tuning}.csv", index=False)
+
+
+# def kemeny_aggregation_cvxpy(dr, solver=cp.GUROBI, consensus_kind="total_order", solver_opts=None):
+#     """
+#     Returns the median consensus according to the symmetric distance. See Hornik and Meyer (2007).
+#     based on cvxpy module
+#     consensus_kind =
+#         weak_order: totality and transitivity
+#         total_order: antisymmetry and transitivity (note that we do not care about i == j)
+#         strict_order: antisymmetry and transitivity
+#     """
+#     ms = dr2mat(dr, kind="preference")
+#
+#     # this function cannot handle missgin values
+#     assert not np.isnan(ms).any()
+#
+#     nv, na, _ = ms.shape    # num_voters, num_alternatives, num_alternatives
+#     c = np.sum(ms, axis=0)  # c matrix in the paper, with diagonal 0
+#     median = cp.Variable(shape=(na, na), boolean=True)
+#
+#     # --- run the optimization, which returns an incidence matrix
+#     p = cp.Problem(
+#         cp.Maximize(cp.sum(cp.multiply(c, median))),
+#         get_constraints(median, consensus_kind)
+#     )
+#     p.solve(solver=solver, solver_opts=solver_opts)
+#
+#     return mat2rf(np.array(median.value, dtype=int), alternatives=dr.index, kind="incidence")

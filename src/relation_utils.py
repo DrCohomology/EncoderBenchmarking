@@ -35,13 +35,15 @@ def get_relation_properties(mat: np.array) -> list:
     return [p for p, satisfied in properties.items() if satisfied]
 
 
-def score2rf(score: pd.Series, increasing: bool = True) -> pd.Series:
+def score2rf(score: pd.Series, increasing: bool = True, impute_missing: bool = True) -> pd.Series:
     """
     Rank the elements of 'score.index' according to 'score'.
     Ascending =
         True: lower score = better rank (for instance, if score is the result of a loss function or a ranking itself)
         False: greater score = better rank (for instance, if score is the result of a score such as roc_auc_score)
     """
+    if impute_missing:
+        score = score.fillna(score.max())
     c = 1 if increasing else -1
     return score.map({s: sorted(score.unique(), key=lambda x: c * x).index(s) for s in score.unique()})
 

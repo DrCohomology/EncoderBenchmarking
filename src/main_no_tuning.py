@@ -71,7 +71,7 @@ def main_loop(experiment_dir,
         "exit_status": 0,  # 0 = no computation; 1 = success; 2 = fail
         "dataset": dataset.name,
         "encoder": u.get_acronym(encoder.__str__(), underscore=False),
-        "error_message": ""
+        "error_message": ""  # empty error message: no more runtime
     }
     exp_name = "{}_{}".format(exec_log["dataset"], exec_log["encoder"])
 
@@ -121,7 +121,7 @@ def main_loop(experiment_dir,
         saveset.to_csv(os.path.join(experiment_dir, saveset_name))
         exec_log["exit_status"] = 1
 
-    # remove default time-out log
+    # dump the log file
     log_name = f'{exec_log["exit_status"]}_{exp_name}.json'
     try:
         with open(os.path.join(experiment_dir, "logs", log_name), "w") as fw:

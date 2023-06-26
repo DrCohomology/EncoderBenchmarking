@@ -1,6 +1,7 @@
 import functools
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import rpy2.robjects as ro
 
 from category_encoders import (
@@ -27,6 +28,7 @@ from rpy2.robjects import pandas2ri
 from rpy2.robjects.conversion import localconverter
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
 
 import src.utils as u
 

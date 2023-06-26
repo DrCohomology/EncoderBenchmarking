@@ -19,12 +19,13 @@ from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from stopit import ThreadingTimeout as Timeout
-from tqdm import tqdm
 
 import src.utils as u
 import src.encoders as e
 import src.config as cfg
 
+from importlib import reload
+reload(u)
 
 def main_loop(experiment_dir,
               dataset, encoder, scaler, cat_imputer, num_imputer, models=tuple(), scorings=tuple(), index=0, num_exp=0,
@@ -142,7 +143,7 @@ if __name__ == "__main__":
     np.random.seed(0)
     gbl_log = {
         "datetime": date.today().__str__(),
-        "arguments": cfg.PARAMETERS,
+        "arguments": cfg.MAIN_PARAMETERS,
         "datasets": cfg.DATASET_IDS["no tuning"],
         "failed_datasets": list(),
         "encoders": [enc.__str__().split('(')[0] for enc in cfg.ENCODERS],
@@ -162,12 +163,12 @@ if __name__ == "__main__":
     # -- Experiments: each experiment is identified by: (dataset, encoder, scaler, imputers)
     experiments = list(itertools.product(cfg.DATASET_NAMES["no tuning"], cfg.ENCODERS,
                                          cfg.SCALERS, cfg.IMPUTERS_CAT, cfg.IMPUTERS_NUM))
-    experiments = u.remove_concluded_main8(experiments, result_dir, model=None)
-    experiments = u.remove_failed_main8(experiments, result_dir)
+    experiments = u.remove_concluded_notuning(experiments, result_dir, model=None)
+    experiments = u.remove_failed_notuning(experiments, result_dir)
     experiments = u.smart_sort(experiments, random=True)
 
     datasets = {}
-    for dname, did in tqdm(zip(cfg.DATASET_NAMES["no tuning"], cfg.DATASET_IDS["no tuning"])):
+    for dname, did in zip(cfg.DATASET_NAMES["no tuning"], cfg.DATASET_IDS["no tuning"]):
         try:
             datasets[dname] = get_dataset(did)
         except OpenMLServerException:
@@ -180,9 +181,9 @@ if __name__ == "__main__":
     ]
 
     # -- Run
-    Parallel(n_jobs=-1, verbose=0)(
+    Parallel(n_jobs=cfg.NUM_PROCESSES, verbose=0)(
         delayed(main_loop)(result_dir, dataset, encoder, scaler, cat_imputer, num_imputer,
                            models=cfg.MODELS["no tuning"], scorings=cfg.SCORINGS,
-                           index=index, num_exp=len(experiments), **cfg.PARAMETERS)
+                           index=index, num_exp=len(experiments), **cfg.MAIN_PARAMETERS)
         for (index, (dataset, encoder, scaler, cat_imputer, num_imputer)) in enumerate(experiments)
     )

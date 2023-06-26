@@ -12,22 +12,13 @@ import warnings
 from functools import reduce
 from itertools import cycle, product
 from numpy.random import default_rng
-from openml.datasets import get_dataset
 from pathlib import Path
-from scipy.stats import kendalltau
-from sklearn.metrics import (
-    accuracy_score,
-    roc_auc_score,
-    f1_score,
-    make_scorer,
-    confusion_matrix,
-)
+from sklearn.metrics import make_scorer
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from skopt import BayesSearchCV
 from skopt.space import Real, Categorical, Integer
-from tqdm import tqdm
 from types import MappingProxyType
-from typing import Tuple, Callable, Iterable, List, Union, Literal, Sized
+from typing import Callable, Dict, Iterable, List, Literal, Tuple, Union
 
 # models
 from catboost import CatBoostClassifier
@@ -42,7 +33,7 @@ from sklearn.tree import DecisionTreeClassifier
 
 # --- Directories
 BASE_DIR = Path(".")
-RESULTS_DIR = BASE_DIR / "experimental_results"
+RESULTS_DIR = BASE_DIR / "analysis" / "experimental_results"
 RANKINGS_DIR = BASE_DIR / "Rankings"
 SENSITIVITY_DIR = BASE_DIR / "Sensitivity"
 FIGURES_DIR = BASE_DIR / "Figures"
@@ -290,7 +281,7 @@ def get_disjoint_samples(S,
                          n_samples: int,
                          sample_size: int,
                          seed: int = 0,
-                         bootstrap: bool = False) -> list[set]:
+                         bootstrap: bool = False) -> list:
     """
     S is the set of objects from which to sample (Iterable and Sized)
     n_samples is the number of disjoint subsets of S to return
@@ -316,7 +307,7 @@ def get_disjoint_samples(S,
 def get_disjoint_samples_bootstrap(S: set,
                                    n_samples: int,
                                    sample_size: int,
-                                   seed: int = 0) -> list[np.array]:
+                                   seed: int = 0) -> list:
     """
     Gets the maximum number of samples possible for n_samples, then bootstrap these samples to reach sample_size
     """
@@ -364,12 +355,21 @@ def smart_sort(experiments, num_small_per_large=100, random=False):
     return [experiments[i] for i in indices]
 
 
-def remove_failed_main8(experiments, result_folder):
+def remove_failed_notuning(experiments, result_folder):
     """
     logs are in the form "success_dataset_encoder"
     """
+    # --- Find the failed logs
+    failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
 
-    print("Removing failed runs.")
+    return [x for x in experiments if
+            f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}.json" not in failed_runs]
+
+
+def remove_failed_modeltuning(experiments, result_folder):
+    """
+    logs are in the form "success_dataset_encoder"
+    """
 
     # --- Find the failed logs
     failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
@@ -378,28 +378,15 @@ def remove_failed_main8(experiments, result_folder):
             f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}.json" not in failed_runs]
 
 
-def remove_failed_main9(experiments, result_folder):
-    """
-    logs are in the form "success_dataset_encoder"
-    """
-
-    print("Removing failed runs.")
-
-    # --- Find the failed logs
-    failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
-
-    return [x for x in experiments if
-            f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}.json" not in failed_runs]
-
-
-def remove_concluded_main8(experiments, result_folder, model=None):
-    print("Removing completed runs.")
-
-    # --- Load df_concatenated
+def remove_concluded_notuning(experiments, result_folder, model=None):
+    # --- Load df_concatenated. If none exists, return all experiments
     try:
         df_concatenated = pd.read_csv(os.path.join(result_folder, "main8_final.csv"))
     except FileNotFoundError:
-        df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+        try:
+            df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+        except FileNotFoundError:
+            return experiments
 
     if model is not None:
         df_concatenated = df_concatenated.query("model == @model")
@@ -409,14 +396,15 @@ def remove_concluded_main8(experiments, result_folder, model=None):
     return [x for x in experiments if (x[0], get_acronym(x[1].__str__(), underscore=False)) not in groups]
 
 
-def remove_concluded_main9(experiments, result_folder, model=None):
-    print("Removing completed runs.")
-
-    # --- Load df_concatenated
+def remove_concluded_modeltuning(experiments, result_folder, model=None):
+    # --- Load df_concatenated. If none exists, return all experiments
     try:
         df_concatenated = pd.read_csv(os.path.join(result_folder, "main9_final.csv"))
     except FileNotFoundError:
-        df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+        try:
+            df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+        except FileNotFoundError:
+            return experiments
 
     if model is not None:
         df_concatenated = df_concatenated.query("model == @model")
@@ -442,12 +430,10 @@ def remove_concluded_runs(all_experiments, result_folder, repeat_unsuccessful=Fa
     try:
         df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
     except FileNotFoundError:
-        print(f"df_concatenated not found in {result_folder}")
         df_concatenated = None
     experiments = []
 
-    print("Checking experiments")
-    for experiment in tqdm(all_experiments):
+    for experiment in all_experiments:
         """
         main6 experiments are identified with scoring (among the rest), while main7 experiments are not. 
         Naming styles are also different.
@@ -795,6 +781,9 @@ def load_sample_similarity_dataframe(tuning) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# --- DataFrame utilities
+
+
 def format_df_sim(df_sim: pd.DataFrame) -> pd.DataFrame:
     tmp = df_sim.copy().rename(columns=SIMILARITY_LATEX)
     for col in tmp.columns:
@@ -872,7 +861,7 @@ def pairwise_level_comparison_long_format(df_sim: pd.DataFrame, comparison_level
     return pd.concat(l, axis=0).rename("similarity").to_frame().reset_index()
 
 
-def join_wide2long(named_dataframes: dict[str: pd.DataFrame], comparison_level: str) -> pd.DataFrame:
+def join_wide2long(named_dataframes: Dict, comparison_level: str) -> pd.DataFrame:
     """
     named_dataframes = {similarity_name : similarity matrix in square format}
 
@@ -909,6 +898,9 @@ def index_sorted_by_median(df, groupby_col, target_col):
 
 def index_sorted_by_mean(df, groupby_col, target_col):
     return df.groupby(groupby_col)[target_col].mean().sort_values().index
+
+
+# --- Plot utilities
 
 
 def sorted_boxplot_horizontal(data, x, y, order_by="median", **kwargs):

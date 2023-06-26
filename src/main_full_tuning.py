@@ -192,12 +192,12 @@ def main_loop(result_dir,
 # ---- Execution
 gbl_log = {
     "datetime": date.today().__str__(),
-    "arguments": cfg.PARAMETERS,
+    "arguments": cfg.MAIN_PARAMETERS,
     "datasets": cfg.DATASET_IDS["full tuning"],
     "failed_datasets": list(),
     "encoders": [enc.__str__().split('(')[0] for enc in cfg.ENCODERS],
     "models": [m.__class__.__name__ for m in cfg.MODELS["full tuning"]],
-    "scorings": [s.__name__ for s in cfg.SCORINGS["full tuning"]],
+    "scorings": [s.__name__ for s in cfg.SCORINGS],
 }
 
 if __name__ == "__main__":
@@ -209,7 +209,7 @@ if __name__ == "__main__":
     np.random.seed(0)
     gbl_log = {
         "datetime": date.today().__str__(),
-        "arguments": cfg.PARAMETERS,
+        "arguments": cfg.MAIN_PARAMETERS,
         "datasets": cfg.DATASET_IDS["full tuning"],
         "failed_datasets": list(),
         "encoders": [enc.__str__().split('(')[0] for enc in cfg.ENCODERS],
@@ -230,12 +230,12 @@ if __name__ == "__main__":
     experiments = itertools.product(cfg.DATASET_NAMES["full tuning"], cfg.ENCODERS,
                                     cfg.SCALERS, cfg.IMPUTERS_CAT, cfg.IMPUTERS_NUM,
                                     cfg.MODELS["full tuning"], cfg.SCORINGS)
-    experiments = u.remove_concluded_runs(experiments, result_dir, repeat_unsuccessful=False)
+    # experiments = u.remove_concluded_runs(experiments, result_dir, repeat_unsuccessful=False) !!! OUTDATED
     experiments = u.smart_sort(experiments, random=True)
 
     # -- Load datasets
     datasets = {}
-    for dname, did in tqdm(zip(cfg.DATASET_NAMES["full tuning"], cfg.DATASET_IDS["full tuning"])):
+    for dname, did in zip(cfg.DATASET_NAMES["full tuning"], cfg.DATASET_IDS["full tuning"]):
         try:
             datasets[dname] = get_dataset(did)
         except OpenMLServerException:
@@ -247,9 +247,9 @@ if __name__ == "__main__":
         for (dname, encoder, scaler, cat_imputer, num_imputer, model, scoring) in experiments
     ]
 
-    Parallel(n_jobs=-1, verbose=0)(
+    Parallel(n_jobs=cfg.NUM_PROCESSES, verbose=0)(
         delayed(main_loop)(result_dir, dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring,
-                           index=index, num_exp=len(experiments), **cfg.PARAMETERS)
+                           index=index, num_exp=len(experiments), **cfg.MAIN_PARAMETERS)
         for (index, (dataset, encoder, scaler, cat_imputer, num_imputer, model, scoring)) in
         enumerate(experiments)
     )

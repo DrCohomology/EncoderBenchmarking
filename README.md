@@ -21,8 +21,8 @@ To aggregate results with Kemeny aggregation, install and configure [Gurobi](htt
 ## Execute the experiments
 1. Open a terminal and navigate to `EncoderBenchmarking`;
 2. activate `venv`;
-3. configure the experimental parameters by editing `src.config.py`;
-4. run `src/main_full_tuning.py`, `src/main_model_tuning.py`, and `src/main_no_tuning.py`; 
+3. configure the experimental parameters by editing `src\config.py`;
+4. run `src\main_full_tuning.py`, `src\main_model_tuning.py`, and `src\main_no_tuning.py`; 
 5. after execution, results are stored in `analysis\experimental_results`.
 
 ## Analysis and figures
@@ -33,7 +33,7 @@ The objects must implement the scikit-learn API:
 - an `Encoder` implements the `fit`, `transform`, and `fit_transform` methods;
 - a `Model` implements the `fit`, `predict`, and `fit_predict` methods;
 - a `quality metric` is a function with signature `(y_true, y_pred) -> float`.
-Edit the corresponding parameters in `config.py` to add the objects to the benchmark. 
+Edit the corresponding parameters in `src\config.py` to add the objects to the benchmark. 
 
 [//]: # (## Aggregation strategy)
 

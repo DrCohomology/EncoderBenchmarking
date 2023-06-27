@@ -16,6 +16,7 @@ import src.utils as u
 import src.relation_utils as rlu
 import src.rank_metrics as rm
 
+
 class BaseAggregator(object):
     """
     Aggregate all qualities, saved in 'self.df', and/or rankings, saved in 'self.rf', into a consensus ranking for

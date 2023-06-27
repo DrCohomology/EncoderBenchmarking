@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import warnings
 
-from scipy.stats import kendalltau, spearmanr, ConstantInputWarning
+from scipy.stats import kendalltau, spearmanr, SpearmanRConstantInputWarning
 from typing import Iterable, Union
 
 
@@ -39,7 +39,7 @@ def jaccard_worst(col1: pd.Series, col2: pd.Series) -> float:
 def spearman_rho(x: Iterable, y: Iterable, nan_policy="omit"):
     try:
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=ConstantInputWarning)
+            warnings.filterwarnings("ignore", category=SpearmanRConstantInputWarning)
             return spearmanr(x, y, nan_policy=nan_policy)[0]
     except ValueError:
         return np.nan

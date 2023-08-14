@@ -23,7 +23,8 @@ To aggregate results with Kemeny aggregation, install and configure [Gurobi](htt
 2. activate `venv`;
 3. configure the experimental parameters by editing `src\config.py`;
 4. run `src\main_full_tuning.py`, `src\main_model_tuning.py`, and `src\main_no_tuning.py`; 
-5. after execution, results are stored in `analysis\experimental_results`.
+5. after execution, results in the form of a `.csv` file per factor combination, are stored in `analysis\experimental_results`, in the subfolders `full tuning`, `model tuning`, and `no tuning`;
+6. concatenate the abovementioned files to obtain `results.parquet` --- code for this step is not provided.
 
 ## Analysis and figures
 All of the code necessary to reproduce the analysis and the plots is available in the `experimental_results` folder.

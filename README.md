@@ -23,7 +23,7 @@ To aggregate results with Kemeny aggregation, install and configure [Gurobi](htt
 2. activate `venv`;
 3. configure the experimental parameters by editing `src\config.py`; 
 4. run `src\main_full_tuning.py`, `src\main_model_tuning.py`, and `src\main_no_tuning.py`; the data is automatically fetched from [OpenML](https://www.openml.org/);
-5. after execution, results in the form of a `.csv` file per factor combination, are stored in `analysis\experimental_results`, in the subfolders `full tuning`, `model tuning`, and `no tuning` --- not provided;
+5. results in the form of a `.csv` file per factor combination, are stored in `analysis\experimental_results`, in the subfolders `full tuning`, `model tuning`, and `no tuning` --- not provided; the `.csv` files have schema `dataset, encoder, scaler, model, scoring, cv_score, tuning_score, tuning_time` plus eventual hyperparameters of the model;
 6. the abovementioned files are concatenated and saved into `analysis\experimental_results\results.parquet`, from which the rankings `rankings.parquet` are computed; 
 
 ## Analysis and figures

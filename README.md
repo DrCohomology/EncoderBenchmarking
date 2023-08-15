@@ -21,19 +21,28 @@ To aggregate results with Kemeny aggregation, install and configure [Gurobi](htt
 ## Execute the experiments
 1. Open a terminal and navigate to `EncoderBenchmarking`;
 2. activate `venv`;
-3. configure the experimental parameters by editing `src\config.py`;
-4. run `src\main_full_tuning.py`, `src\main_model_tuning.py`, and `src\main_no_tuning.py`; 
+3. configure the experimental parameters by editing `src\config.py`; 
+4. run `src\main_full_tuning.py`, `src\main_model_tuning.py`, and `src\main_no_tuning.py`; the data is automatically fetched from [OpenML](https://www.openml.org/);
 5. after execution, results in the form of a `.csv` file per factor combination, are stored in `analysis\experimental_results`, in the subfolders `full tuning`, `model tuning`, and `no tuning` --- not provided;
-6. concatenate the abovementioned files to obtain `results.parquet` --- code for this step is not provided.
+6. the abovementioned files are concatenated and saved into `analysis\experimental_results\results.parquet`, from which the rankings `rankings.parquet` are computed; 
 
 ## Analysis and figures
-All of the code necessary to reproduce the analysis and the plots is available in the `experimental_results` folder.
+All of the code necessary to reproduce the analysis and the plots is available in the `analysis` folder.
+`results_analysis.ipynb` depicts how to process `results.parquet` and `rankings.parquet` into the analysis' results stored in `analysis_results`.
 
-# Add custom Encoder, ML model, quality metric
+# Additional information 
+
+## Add custom Encoder, ML model, quality metric
 The objects must implement the scikit-learn API:
 - an `Encoder` implements the `fit`, `transform`, and `fit_transform` methods;
 - a `Model` implements the `fit`, `predict`, and `fit_predict` methods;
-- a `quality metric` is a function with signature `(y_true, y_pred) -> float`.
+- a `quality metric` is a function with signature `(y_true, y_pred) -> float` or `(y_true, y_score) -> float` if the metric requires probabilities (such as ROC AUC).
+
+## Add a custom dataset
+The data is automatically fetched from [OpenML](https://www.openml.org/) via the dataset `id`'s stored in `src\utils.DATASETS` and `src\utils.DATASETS_SMALL`. 
+To add a new OpenML dataset, add a corresponding `name: id` entry to the abovementioned dictionaries.  
+The benchmark is not configured to easily add non-OpenML datasets, requiring changes to the `src\main_[]_tuning.py` files. 
+ 
 Edit the corresponding parameters in `src\config.py` to add the objects to the benchmark. 
 
 [//]: # (## Aggregation strategy)

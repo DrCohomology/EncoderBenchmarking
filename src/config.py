@@ -3,7 +3,7 @@ import src.utils as u
 
 from functools import reduce
 from lightgbm import LGBMClassifier
-from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
+from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, balanced_accuracy_score
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
@@ -15,10 +15,10 @@ from sklearn.tree import DecisionTreeClassifier
 # --- General parameters
 RANDOM_STATE = 1
 MAIN_PARAMETERS = {
-    "n_splits": 5,
-    "timeout": 6000,
+    "n_splits": 5,  # splits of cross-validation
+    "timeout": 6000,  # maximum allowed run time in seconds
 }
-NUM_PROCESSES = 1
+NUM_PROCESSES = 1  # pass to joblib.Parallel for parallel execution
 
 
 # --- Encoders
@@ -50,8 +50,8 @@ DATASET_IDS = {
 MODELS = {
     "no tuning": [
         DecisionTreeClassifier(random_state=RANDOM_STATE + 2, max_depth=5),
-        # SVC(random_state=RANDOM_STATE + 4, C=1.0, kernel="rbf", gamma="scale"),
-        # KNeighborsClassifier(n_neighbors=5),
+        SVC(random_state=RANDOM_STATE + 4, C=1.0, kernel="rbf", gamma="scale", probability=True),
+        KNeighborsClassifier(n_neighbors=5),
         LogisticRegression(max_iter=100, random_state=RANDOM_STATE + 6, solver="lbfgs")],
     "model tuning": [
         DecisionTreeClassifier(random_state=RANDOM_STATE+2),
@@ -60,7 +60,7 @@ MODELS = {
     ],
     "full tuning": [
         DecisionTreeClassifier(random_state=RANDOM_STATE+2),
-        SVC(random_state=RANDOM_STATE+4),
+        SVC(random_state=RANDOM_STATE+4, probability=True),
         KNeighborsClassifier(),
         LogisticRegression(max_iter=100, random_state=RANDOM_STATE+6, solver="lbfgs"),
         LGBMClassifier(random_state=RANDOM_STATE+3, n_estimators=3000, metric="None"),  # LGBM needs early_stopping
@@ -68,7 +68,7 @@ MODELS = {
 }
 
 # --- Quality metrics
-SCORINGS = [accuracy_score, roc_auc_score, f1_score]
+SCORINGS = [accuracy_score, roc_auc_score, f1_score, balanced_accuracy_score]
 
 # --- Other pre-processing classes
 SCALERS = [RobustScaler()]

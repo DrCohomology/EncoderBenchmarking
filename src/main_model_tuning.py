@@ -102,6 +102,11 @@ def main_loop(result_folder,
 
                         model = GS.best_estimator_
 
+                        if scoring.__name__ == "roc_auc_score":
+                            cv_score = scoring(yte, model.predict_proba(prepipe.transform(Xte))[:, 1])
+                        else:
+                            cv_score = scoring(yte, model.predict(prepipe.transform(Xte)))
+
                         out = {
                             # "index": i,
                             "dataset": dataset.name,
@@ -110,7 +115,7 @@ def main_loop(result_folder,
                             "scaler": scaler.__class__.__name__,
                             "model": model.__class__.__name__,
                             "scoring": scoring.__name__,
-                            "cv_score": scoring(yte, model.predict(prepipe.transform(Xte))),
+                            "cv_score": cv_score,
                             "tuning_score": GS.best_score_,
                             "time": end - start
                         }

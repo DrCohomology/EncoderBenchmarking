@@ -151,16 +151,26 @@ def main_loop(result_dir,
                     }
                 # - tuning
                 else:
+                    if scoring.__name__ == "roc_auc_score":
+                        scorer = make_scorer(scoring, needs_proba=True)
+                    else:
+                        scorer = make_scorer(scoring)
+
                     tuning_result, BS = u.tune_pipe(
                         pipe,
                         Xtr, ytr,
                         search_space,
-                        make_scorer(scoring),
+                        scorer,
                         n_jobs=1, n_splits=3, max_iter=5
                     )
 
                 # - save
-                out["cv_score"].append(scoring(yte, BS.predict(Xte)))
+                if scoring.__name__ == "roc_auc_score":
+                    cv_score = scoring(yte, BS.predict_proba(Xte)[:, 1])
+                else:
+                    cv_score = scoring(yte, BS.predict(Xte))
+
+                out["cv_score"].append(cv_score)
                 out["tuning_score"].append(tuning_result["best_score"])
                 out["tuning_time"].append(tuning_result["time"])
                 for hpar in search_space.keys():

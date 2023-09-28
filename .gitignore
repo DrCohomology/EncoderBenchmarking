@@ -3,6 +3,7 @@ result_analysis.py
 results_analysis_test.ipynb
 utils_backup.py
 test.py
+*.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

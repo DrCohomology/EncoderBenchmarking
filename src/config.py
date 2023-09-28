@@ -50,8 +50,8 @@ DATASET_IDS = {
 MODELS = {
     "no tuning": [
         DecisionTreeClassifier(random_state=RANDOM_STATE + 2, max_depth=5),
-        SVC(random_state=RANDOM_STATE + 4, C=1.0, kernel="rbf", gamma="scale"),
-        KNeighborsClassifier(n_neighbors=5),
+        # SVC(random_state=RANDOM_STATE + 4, C=1.0, kernel="rbf", gamma="scale"),
+        # KNeighborsClassifier(n_neighbors=5),
         LogisticRegression(max_iter=100, random_state=RANDOM_STATE + 6, solver="lbfgs")],
     "model tuning": [
         DecisionTreeClassifier(random_state=RANDOM_STATE+2),

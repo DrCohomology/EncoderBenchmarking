@@ -4,13 +4,13 @@ Including conversion functions from rankings (arrays) to adjacency matrices and 
 """
 
 from itertools import product
-from typing import Iterable
+from typing import Iterable, List
 
 import numpy as np
 import pandas as pd
 
 
-def get_relation_properties(mat: np.array) -> list:
+def get_relation_properties(mat: np.array) -> List:
     """
     model is a domination matrix
     """
@@ -112,7 +112,7 @@ def dr2mat(dr: pd.DataFrame, kind: str = "preference") -> np.array:
     return ms
 
 
-def get_constraints(mat: np.array, ranking_type: str = "total_order") -> list[bool]:
+def get_constraints(mat: np.array, ranking_type: str = "total_order") -> List[bool]:
     """
     Get constraints on the adjacency matrix of a ranking 'mat', in order to satisfy properties defined by 'ranking_type'.
 

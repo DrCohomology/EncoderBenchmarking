@@ -100,6 +100,11 @@ def main_loop(experiment_dir,
                         warnings.filterwarnings("ignore")
                         model.fit(XEtr, ytr)
                         for scoring in scorings:
+                            if scoring.__name__ == "roc_auc_score":
+                                cv_score = scoring(yte, model.predict_proba(prepipe.transform(Xte))[:, 1])
+                            else:
+                                cv_score = scoring(yte, model.predict(prepipe.transform(Xte)))
+
                             out = {
                                 "dataset": dataset.name,
                                 "fold": fold,
@@ -107,7 +112,7 @@ def main_loop(experiment_dir,
                                 "scaler": scaler.__class__.__name__,
                                 "model": model.__class__.__name__,
                                 "scoring": scoring.__name__,
-                                "cv_score": scoring(yte, model.predict(prepipe.transform(Xte))),
+                                "cv_score": cv_score,
                                 "tuning_time": end - start
                             }
                             saveset = pd.concat([saveset, pd.DataFrame(out, index=[0])], ignore_index=True)

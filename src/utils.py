@@ -34,6 +34,7 @@ from sklearn.tree import DecisionTreeClassifier
 # --- Directories
 BASE_DIR = Path(".")
 RESULTS_DIR = BASE_DIR / "analysis" / "experimental_results"
+ANALYSIS_DIR = BASE_DIR / "analysis" / "analysis_results"
 RANKINGS_DIR = BASE_DIR / "Rankings"
 SENSITIVITY_DIR = BASE_DIR / "Sensitivity"
 FIGURES_DIR = BASE_DIR / "Figures"
@@ -227,7 +228,8 @@ FACTOR_LATEX = MappingProxyType({
     "scoring": MappingProxyType({
         "ACC": "Acc",
         "F1": "F$_1$",
-        "AUC": "AUC"
+        "AUC": "AUC",
+        "BACC": "BAcc"
     }),
     "interpretation": AGGREGATION_LATEX,
     "aggregation": AGGREGATION_LATEX
@@ -550,9 +552,12 @@ def find_bins(universe, weights: np.ndarray, thr):
 
 
 def get_lgbm_scoring(scoring):
-    def lgbm_scoring(y_true, y_pred):
-        return scoring.__name__, scoring(y_true, np.round(y_pred)), True
-
+    if scoring.__name__ == "roc_auc_score":
+        def lgbm_scoring(y_true, y_pred):
+            return scoring.__name__, scoring(y_true, y_pred), True
+    else:
+        def lgbm_scoring(y_true, y_pred):
+            return scoring.__name__, scoring(y_true, np.round(y_pred)), True
     return lgbm_scoring
 
 
@@ -718,14 +723,14 @@ def load_df() -> pd.DataFrame:
     """
     Load evaluations dataframe from hard-coded path
     """
-    return pd.read_parquet(RESULTS_DIR / "results.parquet")
+    return pd.read_parquet(RESULTS_DIR / "results_review.parquet")
 
 
 def load_rf() -> pd.DataFrame:
     """
     Load rank functions from hard-coded path
     """
-    return pd.read_parquet(RESULTS_DIR / "rankings.parquet")
+    return pd.read_parquet(RESULTS_DIR / "rankings_review.parquet")
 
 
 def load_df_rf() -> Tuple[pd.DataFrame, ...]:
@@ -736,7 +741,7 @@ def load_aggrf() -> pd.DataFrame:
     """
     Load dataframe of aggregate rankings from hard-coded path
     """
-    return pd.read_parquet(RESULTS_DIR / "consensuses.parquet")
+    return pd.read_parquet(ANALYSIS_DIR / "consensuses.parquet")
 
 
 def load_aggregated_similarity_dataframes() -> dict:
@@ -745,7 +750,7 @@ def load_aggregated_similarity_dataframes() -> dict:
     The output dict format is "filename : dataframe"
     """
     out = {}
-    for path in glob.glob(str(RESULTS_DIR / "pw_AGG*.parquet")):
+    for path in glob.glob(str(ANALYSIS_DIR / "pw_AGG*.parquet")):
         out[Path(path).stem] = pd.read_parquet(path)
     return out
 
@@ -760,7 +765,7 @@ def load_similarity_dataframes() -> dict:
 
     out = {}
     # filter out aggregated rankings
-    for path in set(glob.glob(str(RESULTS_DIR / "pw*.parquet"))) - set(glob.glob(str(RESULTS_DIR / "pw_AGG*.parquet"))):
+    for path in set(glob.glob(str(ANALYSIS_DIR / "pw*.parquet"))) - set(glob.glob(str(RESULTS_DIR / "pw_AGG*.parquet"))):
         tmp = pd.read_parquet(path)
         try:
             tmp.index = tmp.index.astype(object).rename(["dataset", "model", "tuning", "scoring"])
@@ -775,7 +780,7 @@ def load_similarity_dataframes() -> dict:
 
 def load_sample_similarity_dataframe(tuning) -> pd.DataFrame:
     try:
-        return pd.read_parquet(RESULTS_DIR / f"sample_df_sim_{tuning}.parquet")
+        return pd.read_parquet(ANALYSIS_DIR / f"sample_df_sim_{tuning}.parquet")
     except FileNotFoundError:
         print(f"'sample_sim_{tuning}.parquet' not found in {RESULTS_DIR}.")
         return pd.DataFrame()
@@ -1347,8 +1352,6 @@ def boxplot_encoder_ranks(rf, ax, model=None):
     ax.set_xlim(0, 32)
     ax.set_xticks([0, 10, 20, 30])
     ax.grid(axis="x", zorder=-1, linewidth=0.4)
-
-
 
 
 

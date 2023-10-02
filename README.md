@@ -3,7 +3,11 @@
 Repository for the paper [A benchmark of categorical encoders for binary classification](https://arxiv.org/abs/2307.09191), 
 accepted at NeurIPS 2023, Datasets and Benchmarks track.
 
-<img alt="Ranks of encoders" src="analysis/plots/encoder_ranks.png" title="Ranks"/>
+<figure>
+  <img alt="Ranks of encoders" src="analysis/plots/encoder_ranks.png" title="Ranks" caption/>
+  <figcaption>Ranks of encoders conditional on the model. Sum, One-Hot, WoE, and Binary encoders are consistently among the best for logistic regression, while no encoder is such for decision trees.</figcaption>
+</figure>
+
 
 # Replicating the experimental results
 

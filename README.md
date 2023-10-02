@@ -3,7 +3,7 @@
 Repository for the paper [A benchmark of categorical encoders for binary classification](https://arxiv.org/abs/2307.09191), 
 accepted at NeurIPS 2023, Datasets and Benchmarks track.
 
-<img alt="Replicability of experimental results" src="analysis/plots/encoder_ranks.png" title="Ranks"/>
+<img alt="Ranks of encoders" src="analysis/plots/encoder_ranks.png" title="Ranks"/>
 
 # Replicating the experimental results
 

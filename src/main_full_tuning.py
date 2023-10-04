@@ -240,7 +240,8 @@ if __name__ == "__main__":
     experiments = itertools.product(cfg.DATASET_NAMES["full tuning"], cfg.ENCODERS,
                                     cfg.SCALERS, cfg.IMPUTERS_CAT, cfg.IMPUTERS_NUM,
                                     cfg.MODELS["full tuning"], cfg.SCORINGS)
-    experiments = u.remove_concluded_runs(experiments, result_dir, repeat_unsuccessful=False) !!! OUTDATED
+    experiments = u.remove_concluded_fulltuning(experiments, result_dir, model=None)
+    experiments = u.remove_failed_fulltuning(experiments, result_dir)
     experiments = u.smart_sort(experiments, random=True)
 
     # -- Load datasets

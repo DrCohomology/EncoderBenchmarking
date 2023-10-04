@@ -359,7 +359,7 @@ def smart_sort(experiments, num_small_per_large=100, random=False):
 
 def remove_failed_notuning(experiments, result_folder):
     """
-    logs are in the form "success_dataset_encoder"
+    logs are in the form "success_dataset_encoder.json"
     """
     # --- Find the failed logs
     failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
@@ -370,7 +370,7 @@ def remove_failed_notuning(experiments, result_folder):
 
 def remove_failed_modeltuning(experiments, result_folder):
     """
-    logs are in the form "success_dataset_encoder"
+    logs are in the form "success_dataset_encoder.json"
     """
 
     # --- Find the failed logs
@@ -378,6 +378,17 @@ def remove_failed_modeltuning(experiments, result_folder):
 
     return [x for x in experiments if
             f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}.json" not in failed_runs]
+
+
+def remove_failed_fulltuning(experiments, result_folder):
+    """
+    logs are in the form "success_dataset_encoder_model_scoring.json"
+    """
+    # --- Find the failed logs
+    failed_runs = [os.path.split(x)[-1] for x in glob.glob(os.path.join(result_folder, "logs", "2*.json"))]
+    return [x for x in experiments if
+            f"2_{x[0]}_{get_acronym(x[1].__str__(), underscore=False)}_{get_acronym(x[-2].__class__.__name__, underscore=False)}_{x[-1].__name__}.json"
+            not in failed_runs]
 
 
 def remove_concluded_notuning(experiments, result_folder, model=None):
@@ -414,6 +425,29 @@ def remove_concluded_modeltuning(experiments, result_folder, model=None):
     # --- Mask of non completed runs
     groups = set(df_concatenated.groupby("dataset encoder".split()).groups)
     return [x for x in experiments if (x[0], get_acronym(x[1].__str__(), underscore=False)) not in groups]
+
+
+def remove_concluded_fulltuning(experiments, result_folder, model=None):
+    # --- Load df_concatenated. If none exists, return all experiments
+    try:
+        df_concatenated = pd.read_csv(os.path.join(result_folder, "main6_final.csv"))
+    except FileNotFoundError:
+        try:
+            df_concatenated = pd.read_csv(os.path.join(result_folder, "_concatenated.csv"))
+        except FileNotFoundError:
+            return experiments
+
+    if model is not None:
+        df_concatenated = df_concatenated.query("model == @model")
+
+    # --- Mask of non completed runs
+    groups = set(df_concatenated.groupby("dataset encoder model scoring".split()).groups)
+    return [x for x in experiments if (x[0],
+                                       get_acronym(x[1].__str__(), underscore=False),
+                                       x[-2].__class__.__name__,
+                                       x[-1].__name__) not in groups]
+
+
 
 
 def remove_concluded_runs(all_experiments, result_folder, repeat_unsuccessful=False):

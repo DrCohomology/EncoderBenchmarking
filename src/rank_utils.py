@@ -386,7 +386,7 @@ def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5),
     sample_df_sim.aggregation = sample_df_sim.aggregation.map(lambda x: defaultdict(lambda: x, u.AGGREGATION_NAMES)[x])
 
     if save:
-        sample_df_sim.to_parquet(u.RANKINGS_DIR / f"sample_sim_{tuning}.parquet")
+        sample_df_sim.to_parquet(u.ANALYSIS_DIR / f"sample_sim_{tuning}.parquet")
 
 
 

@@ -4,8 +4,13 @@ Repository for the paper [A benchmark of categorical encoders for binary classif
 accepted at NeurIPS 2023, Datasets and Benchmarks track.
 
 <figure>
-  <img alt="Ranks of encoders" src="analysis/plots/encoder_ranks.png" title="Ranks" caption/>
-  <figcaption>Ranks of encoders conditional on the model. Sum, One-Hot, WoE, and Binary encoders are consistently among the best for logistic regression, while no encoder is such for decision trees.</figcaption>
+  <img alt="Ranks of encoders" src="analysis/plots/encoder_ranks.png" title="Ranks">
+  <figcaption><em>
+        Ranks of encoders conditional on the model (lower rank is better).
+        Sum, One-Hot, WoE, and Binary encoders are consistently among the best for logistic regression (LogReg), 
+        while no encoder is clearly on top for decision tree (DT). 
+        Even considering all the models (LogReg, DT, kNN, SVM, and LGBM), Sum, One-Hot, WoE, and Binary encoders are the best ones.
+  </em></figcaption>
 </figure>
 
 
@@ -24,11 +29,10 @@ The R version we used is `4.2.2`, with the `lme4` package version `1.1-31`.\
 To aggregate results with Kemeny aggregation, install and configure [Gurobi](https://www.gurobi.com/) and its [Python API](https://pypi.org/project/gurobipy/).
 
 ## Configure, add to, and run the experiments
-In `src/README.md`.
+In [the experiments directory](https://github.com/DrCohomology/EncoderBenchmarking/tree/main/src).
 
 ## Analysis and figures
-All of the code necessary to reproduce the analysis and the plots is available in the `analysis` folder.
-`results_analysis.ipynb` depicts how to process `results.parquet` and `rankings.parquet` into the analysis' results stored in `analysis_results`.
+All of the code necessary to reproduce the analysis and the plots is available in [the analysis directory](https://github.com/DrCohomology/EncoderBenchmarking/tree/main/analysis).
 
 [//]: # (## Aggregation strategy)
 

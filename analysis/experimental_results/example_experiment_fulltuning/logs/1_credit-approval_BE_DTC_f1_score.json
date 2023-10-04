@@ -1,0 +1,1 @@
+{"exit_status": 1, "dataset": "credit-approval", "encoder": "BE", "model": "DTC", "scoring": "f1_score", "error_message": ""}

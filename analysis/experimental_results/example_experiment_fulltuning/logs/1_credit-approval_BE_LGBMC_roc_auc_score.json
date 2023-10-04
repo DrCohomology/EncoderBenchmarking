@@ -1,0 +1,1 @@
+{"exit_status": 1, "dataset": "credit-approval", "encoder": "BE", "model": "LGBMC", "scoring": "roc_auc_score", "error_message": ""}

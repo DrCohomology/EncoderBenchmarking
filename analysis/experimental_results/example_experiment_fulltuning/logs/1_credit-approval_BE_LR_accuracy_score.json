@@ -1,0 +1,1 @@
+{"exit_status": 1, "dataset": "credit-approval", "encoder": "BE", "model": "LR", "scoring": "accuracy_score", "error_message": ""}

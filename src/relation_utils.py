@@ -42,6 +42,8 @@ def score2rf(score: pd.Series, increasing: bool = True, impute_missing: bool = T
         True: lower score = better rank (for instance, if score is the result of a loss function or a ranking itself)
         False: greater score = better rank (for instance, if score is the result of a score such as roc_auc_score)
     """
+    if np.isnan(score).all():
+        return score.map(lambda x: 0)
     if impute_missing:
         score = score.fillna(score.max())
     c = 1 if increasing else -1

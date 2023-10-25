@@ -448,8 +448,6 @@ def remove_concluded_fulltuning(experiments, result_folder, model=None):
                                        x[-1].__name__) not in groups]
 
 
-
-
 def remove_concluded_runs(all_experiments, result_folder, repeat_unsuccessful=False):
     """
     Checks for every experiment in all_experiments whether it was already run or not.
@@ -751,26 +749,7 @@ def get_acronym(string, underscore=True):
     return out + "_" if underscore else out
 
 
-# --- Load experimental results and manipulations
-
-def load_df() -> pd.DataFrame:
-    """
-    Load evaluations dataframe from hard-coded path
-    """
-    return pd.read_parquet(RESULTS_DIR / "results_review.parquet")
-
-
-def load_rf() -> pd.DataFrame:
-    """
-    Load rank functions from hard-coded path
-    """
-    return pd.read_parquet(RESULTS_DIR / "rankings_review.parquet")
-
-
-def load_df_rf() -> Tuple[pd.DataFrame, ...]:
-    return load_df(), load_rf()
-
-
+# --- Load experimental results and intermediate analysis datasets
 def load_aggrf() -> pd.DataFrame:
     """
     Load dataframe of aggregate rankings from hard-coded path
@@ -816,7 +795,7 @@ def load_sample_similarity_dataframe(tuning) -> pd.DataFrame:
     try:
         return pd.read_parquet(ANALYSIS_DIR / f"sample_df_sim_{tuning}.parquet")
     except FileNotFoundError:
-        print(f"'sample_sim_{tuning}.parquet' not found in {RESULTS_DIR}.")
+        print(f"'sample_sim_{tuning}.parquet' not found in {ANALYSIS_DIR}.")
         return pd.DataFrame()
 
 
@@ -955,9 +934,16 @@ def sorted_boxplot_horizontal(data, x, y, order_by="median", **kwargs):
                        **kwargs)
 
 
-def sorted_boxplot_vertical(data, x, y, **kwargs):
+def sorted_boxplot_vertical(data, x, y, order_by="median", **kwargs):
+    if order_by == "median":
+        order = index_sorted_by_median(data, groupby_col=x, target_col=y)
+    elif order_by == "mean":
+        order = index_sorted_by_mean(data, groupby_col=x, target_col=y)
+    else:
+        raise ValueError(f"{order_by} is an invalid value for order_by.")
+
     return sns.boxplot(data, x=x, y=y,
-                       order=index_sorted_by_median(data, groupby_col=x, target_col=y),
+                       order=order,
                        **kwargs)
 
 
@@ -1067,17 +1053,10 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
                                 annot_fontsize=10,
                                 figsize=(1.8, 1.8),
                                 fmt: str = ".1f",
-                                cmaps: tuple = (sns.light_palette(("#CD212A"), as_cmap=True),
+                                cmaps: tuple = (sns.light_palette("#CD212A", as_cmap=True),
                                                 sns.light_palette("#2A21CD", as_cmap=True)),
-                                save_plot: bool = True,
-                                show_plot: bool = True,
                                 ax=None,
                                 summary_statistic: Literal["mean", "median"] = "mean",
-                                title=None,
-                                tx=None,
-                                ty=None,
-                                adjust_left=0,
-                                adjust_right=0
                                 ):
     """
     Gets and heatmap of the similarity dataframe df_im in long format.
@@ -1168,14 +1147,6 @@ def heatmap_longformat_multisim(df_sim: pd.DataFrame,
     #     elif comparison_level in ["model", "aggregation"]:
     #         ax.set_title(title, fontsize=9)
 
-    sns.despine()
-    plt.tight_layout(pad=0.5)
-
-    if save_plot:
-        plt.savefig(FIGURES_DIR / f"heatmap_{comparison_level}_{similarities[0]}_{similarities[1]}.pdf", dpi=600)
-
-    if show_plot:
-        plt.show()
 
 
 def lineplot_longformat_sample_sim(df_sim, similarity,
@@ -1273,7 +1244,7 @@ def boxplots_longformat_sample_sim(df_sim, similarity,
         print(f"Saved figure in {FIGURES_DIR}/boxplot_sample_{hue}_{similarity}.pdf")
 
 
-def lineplot_replicability(hue="model", show=True):
+def lineplot_replicability(sample_df_sim, hue="model", show=True):
     """
     Load and plot sample_df_sim for different tuning strategies in a 2x3 matrix of plots.
     """
@@ -1292,7 +1263,8 @@ def lineplot_replicability(hue="model", show=True):
 
     for isim, sim in enumerate(["rho", "jaccard"]):
         for itun, tuning in enumerate(["no", "model", "full"]):
-            sample_df_sim = load_sample_similarity_dataframe(tuning=tuning)
+
+            sample_df_sim_tmp = sample_df_sim.query("tuning == @tuning")
 
             xb = (sim == "jaccard")
             yl = (tuning == "no")
@@ -1300,12 +1272,13 @@ def lineplot_replicability(hue="model", show=True):
             with sns.axes_style("ticks", {"xtick.bottom": True, "ytick.left": True}):
                 ax = fig.add_subplot(gs[isim, itun])
 
-                lineplot_longformat_sample_sim(sample_df_sim, similarity=sim, save_plot=False, show_plot=False,
+                lineplot_longformat_sample_sim(sample_df_sim_tmp, similarity=sim,
+                                               save_plot=False, show_plot=False,
                                                hue=hue,
                                                estimator="mean",
                                                ax=ax,
                                                )
-                ax.set_xticks(sample_df_sim.sample_size.unique())
+                ax.set_xticks(sample_df_sim_tmp.sample_size.unique())
 
                 if hue == "model":
                     if sim == "rho":
@@ -1317,7 +1290,6 @@ def lineplot_replicability(hue="model", show=True):
                         ax.set_yticks([0, 0.25, 0.5, 0.75])
                     elif sim == "jaccard":
                         ax.set_yticks([0, 0.3, 0.6, 0.9])
-
 
             if not xb:
                 ax.set_xlabel(None)
@@ -1345,15 +1317,17 @@ def lineplot_replicability(hue="model", show=True):
         elif hue == "aggregation":
             plt.subplots_adjust(top=0.8)
             plt.figlegend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.8 + 0.02, 1, 0.2),
-                          loc="lower left", mode="expand", borderaxespad=1, ncol=5, frameon=False)
+                          loc="lower left", mode="expand", borderaxespad=1, ncol=4, frameon=False)
         elif hue == "scoring":
             plt.subplots_adjust(top=0.86)
             plt.figlegend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.86 + 0.02, 1, 0.2),
-                          loc="lower center", borderaxespad=1, ncol=3, frameon=False)
+                          loc="lower center", borderaxespad=1, ncol=4, frameon=False)
 
     sns.despine(trim=True)
     if show:
         plt.show()
+
+    return fig
 
 
 def boxplot_encoder_ranks(rf, ax, model=None):
@@ -1388,5 +1362,51 @@ def boxplot_encoder_ranks(rf, ax, model=None):
     ax.grid(axis="x", zorder=-1, linewidth=0.4)
 
 
+def boxplot_runtime(df, ax=None):
+    sns.set(font_scale=0.8)
+    sns.set_style("ticks", {"xtick": False})
+    mpl.rcParams['text.usetex'] = True
+    mpl.rcParams['text.latex.preamble'] = r'\usepackage{mathptmx}'
+    mpl.rc('font', family='Times New Roman')
+
+    ax = sorted_boxplot_vertical(data=df, x="encoder", y="time", order_by="median",
+                                     # palette=sns.light_palette("grey", n_colors=len(rf.index)),
+                                     color="lightgrey",
+                                     showfliers=False,
+                                     linewidth=1, showcaps=False,
+                                     showmeans=True,
+                                     meanprops={"marker": "o",
+                                                "markeredgecolor": "red",
+                                                "markersize": 2},
+                                     medianprops={"linestyle": "-"
+                                                  },
+                                     ax=ax)
+    ax.set_yscale("log")
+    ax.set_ylabel("seconds")
+    ax.set_xlabel("")
+    ax.grid(axis="y", zorder=-1, linewidth=0.4)
+    plt.xticks(rotation=90)
+
+    return ax
 
 
+def get_dataset_tuning_comparison(df: pd.DataFrame)-> pd.DataFrame:
+    """ Return the dataset that compares the qualit of different tuning strategies.
+    """
+
+    df_full = df.query("tuning == 'full'")
+    df_model = df.query("tuning == 'model'")
+    df_no = df.query("tuning == 'no'")
+
+    pk = ["encoder", "dataset", "model", "scoring"]
+
+    df_full_no = pd.merge(df_full, df_no, on=pk, how="inner")
+    df_full_no["gain"] = df_full_no.cv_score_x - df_full_no.cv_score_y
+
+    df_full_model = pd.merge(df_full, df_model, on=pk, how="inner")
+    df_full_model["gain"] = df_full_model.cv_score_x - df_full_model.cv_score_y
+
+    df_model_no = pd.merge(df_model, df_no, on=pk, how="inner")
+    df_model_no["gain"] = df_model_no.cv_score_x - df_model_no.cv_score_y
+
+    return pd.concat([df_full_no, df_model_no, df_full_model], axis=0)

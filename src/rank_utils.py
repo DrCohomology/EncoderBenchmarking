@@ -10,7 +10,7 @@ from pathlib import Path
 from scipy.stats import iqr
 from scikit_posthocs import posthoc_nemenyi_friedman
 from tqdm.notebook import tqdm
-from typing import Iterable, Union
+from typing import AnyStr, Iterable, Union
 
 import src.utils as u
 import src.relation_utils as rlu
@@ -108,10 +108,12 @@ class BaseAggregator(object):
             "the average rank of a1 is significatively differetnt from that of a2".
             The resulting matrix is then translated into a ranking.
         Although, in principle, the matrix is not necessarily transitive, we never encountered that problem.
+        The missing ranks are inputed with the worst rank to make sure that the output of posthoc_nemenyi_friedman has
+            the full dimension (32x32). This is not guaranteed if an encoder has no rank for the entire row.
         """
         self.aggrf[f"rank_nemenyi_{alpha:.02f}"] = rlu.mat2rf(
              rlu.rf2mat(rlu.score2rf(self.rf.mean(axis=1)), kind="domination") *
-             (posthoc_nemenyi_friedman(self.rf.T.reset_index(drop=True)) < alpha).astype(int).to_numpy(),
+             (posthoc_nemenyi_friedman(self.rf.T.reset_index(drop=True).fillna(100)) < alpha).astype(int).to_numpy(),
              alternatives=self.rf.index
         )
 
@@ -147,7 +149,7 @@ class BaseAggregator(object):
                  .join(self.df.groupby(["dataset"]).cv_score.agg(iqr), on="dataset", rsuffix="_iqr")
         d1["cv_score_rescaled"] = (d1["cv_score"] - d1["cv_score_worst"]) / d1["cv_score_iqr"]
         # iqr == 0 means that all encoders are equal on the dataset, i.e., we should ignore the comparison anyway
-        self.aggrf["qual_rescaled_mean"] = d1.query("cv_score_iqr != 0").groupby("encoder").cv_score_rescaled.mean()
+        self.aggrf["qual_rescaled_mean"] = d1.query("cv_score_iqr != 0").groupby("encoder").cv_score_rescaled.mean().fillna(100)
 
     def aggregate(self, strategies: Iterable = "all", ignore_strategies: Iterable = tuple(), **kwargs):
         """
@@ -155,6 +157,11 @@ class BaseAggregator(object):
         """
         if strategies == "all":
             strategies = self.supported_strategies.keys()
+        elif not set(strategies).issubset(self.supported_strategies.keys()):
+            raise ValueError(f"{strategies} are invalid strategies.")
+        elif not set(ignore_strategies).issubset(self.supported_strategies.keys()):
+            raise ValueError(f"{ignore_strategies} are invalid strategies.")
+
         for strategy in set(strategies) - set(ignore_strategies):
             self.supported_strategies[strategy](**kwargs)
 
@@ -202,7 +209,7 @@ class Aggregator(object):
             raise Exception("self.aggrf is not populated yet. Called self.aggregate before saving.")
         return self.aggrf.to_csv(path)
 
-    def aggregate(self, strategies: Union[list, set, str] = "all", ignore_strategies: Union[tuple, list] = tuple(),
+    def aggregate(self, strategies: Iterable = "all", ignore_strategies: Iterable = tuple(),
                   verbose: bool = False, **kwargs):
 
         comb_iter = tqdm(list(self.combinations)) if verbose else self.combinations
@@ -211,7 +218,6 @@ class Aggregator(object):
             a.aggregate(strategies, ignore_strategies=ignore_strategies, **kwargs)
             a.aggrf.columns = pd.MultiIndex.from_product([[model], [tuning], [scoring], a.aggrf.columns],
                                                          names=["model", "tuning", "scoring", "aggregation"])
-
         self.aggrf = pd.concat([a.aggrf for a in self.base_aggregators.values()], axis=1)
 
         return self
@@ -244,8 +250,8 @@ class SampleAggregator(object):
         self.rf1 = self.rf.loc(axis=1)[[str(x) for x in self.datasets_sample_1], :, :, :]
         self.rf2 = self.rf.loc(axis=1)[[str(x) for x in self.datasets_sample_2], :, :, :]
 
-    def aggregate(self, verbose=False, strategies: Union[list, str, set] = "all",
-                  ignore_strategies: Union[list, tuple] = tuple(), **kwargs):
+    def aggregate(self, verbose=False, strategies: Iterable = "all",
+                  ignore_strategies: Iterable = tuple(), **kwargs):
 
         self.a1 = Aggregator(self.df1, self.rf1).aggregate(strategies=strategies,
                                                            ignore_strategies=ignore_strategies, verbose=verbose,
@@ -310,36 +316,32 @@ def kemeny_aggregation_gurobi_ties(rf: pd.DataFrame, **solver_params):
     return rlu.mat2rf(median.X, alternatives=rf.index)
 
 
-# def kemeny_aggregation_cvxpy(dr, solver=cp.GUROBI, consensus_kind="total_order", solver_opts=None):
-#     """
-#     Returns the median consensus according to the symmetric distance. See Hornik and Meyer (2007).
-#     based on cvxpy module
-#     consensus_kind =
-#         weak_order: totality and transitivity
-#         total_order: antisymmetry and transitivity (note that we do not care about i == j)
-#         strict_order: antisymmetry and transitivity
-#     """
-#     ms = dr2mat(dr, kind="preference")
-#
-#     # this function cannot handle missgin values
-#     assert not np.isnan(ms).any()
-#
-#     nv, na, _ = ms.shape    # num_voters, num_alternatives, num_alternatives
-#     c = np.sum(ms, axis=0)  # c matrix in the paper, with diagonal 0
-#     median = cp.Variable(shape=(na, na), boolean=True)
-#
-#     # --- run the optimization, which returns an incidence matrix
-#     p = cp.Problem(
-#         cp.Maximize(cp.sum(cp.multiply(c, median))),
-#         get_constraints(median, consensus_kind)
-#     )
-#     p.solve(solver=solver, solver_opts=solver_opts)
-#
-#     return mat2rf(np.array(median.value, dtype=int), alternatives=dr.index, kind="incidence")
+def get_rankings(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, increasing=True,
+                 impute_missing=True) -> pd.DataFrame:
+    """
+        Compute a ranking of 'alternatives' for each combination of 'factors', according to 'target'.
+        Set increasing = True if 'target is a score, to False if it is a loss or a rank.
+        If impute_missing == True, the empty ranks are imputed.
+    """
+
+    if not set(factors).issubset(df.columns):
+        raise ValueError("factors must be an iterable of columns of df.")
+    if alternatives not in df.columns:
+        raise ValueError("alternatives must be a column of df.")
+    if target not in df.columns:
+        raise ValueError("target must be a column of df.")
+
+    rankings = {}
+    for group, indices in df.groupby(factors).groups.items():
+        score = df.iloc[indices].set_index(alternatives)[target]
+        rankings[group] = rlu.score2rf(score, increasing=increasing, impute_missing=impute_missing)
+
+    return pd.DataFrame(rankings)
 
 
 def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5), repetitions=100,
-                           append_to_existing=True, save=True, bootstrap=False):
+                           append_to_existing=True, save=True, bootstrap=False,
+                           strategies: Iterable = "all", ignore_strategies: Iterable = tuple()):
     """
     Run the replicability analysis. Sample two disjoint sets of datasets from df.dataset.unique(), aggregate results
         across the two samples separately, then compare the aggregated rankings.
@@ -358,13 +360,15 @@ def replicability_analysis(df, rf, tuning, seed=0, sample_sizes=range(5, 26, 5),
     mat_corrs = []
     sample_aggregators = defaultdict(lambda: [])
     for sample_size in tqdm(sample_sizes):
+        # !!! full tuning only has 30 datasets, meaning that the maximum sample size allowedis 15
+        if tuning == "full" and sample_size > 15:
+            continue
+
         inner_mat_corrs = []
-        for _ in tqdm(range(repetitions)):
+        for _ in range(repetitions):
             seed += 1
             a = SampleAggregator(df_, rf_, sample_size, seed=seed, bootstrap=bootstrap).aggregate(
-                ignore_strategies=["kemeny rank"],
-                verbose=False)
-
+                strategies=strategies, ignore_strategies=ignore_strategies, verbose=False)
             tmp_jaccard, tmp_rho = u.pairwise_similarity_wide_format(a.aggrf,
                                                                      simfuncs=[rm.jaccard_best,
                                                                                rm.spearman_rho])

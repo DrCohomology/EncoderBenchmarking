@@ -1,9 +1,11 @@
 # python files
 result_analysis.py
 results_analysis_test.ipynb
+results_analysis_backup.ipynb
 utils_backup.py
 test.py
 *.csv
+/ppt/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -252,3 +254,4 @@ fabric.properties
 /analysis/result_analysis_imputed.ipynb
 /analysis/result_analysis_test.ipynb
 /analysis/experimental_results/main9_0914_RGLMME/
+analysis/result_analysis_backup.ipynb

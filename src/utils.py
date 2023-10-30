@@ -1285,11 +1285,16 @@ def lineplot_replicability(sample_df_sim, hue="model", show=True):
                         ax.set_yticks([0, 0.2, 0.4, 0.6])
                     elif sim == "jaccard":
                         ax.set_yticks([0, 0.1, 0.3, 0.5])
-                if hue == "aggregation":
+                elif hue == "aggregation":
                     if sim == "rho":
                         ax.set_yticks([0, 0.25, 0.5, 0.75])
                     elif sim == "jaccard":
                         ax.set_yticks([0, 0.3, 0.6, 0.9])
+                elif hue == "scoring":
+                    if sim == "rho":
+                        ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8])
+                    elif sim == "jaccard":
+                        ax.set_yticks([0, 0.1, 0.3, 0.5])
 
             if not xb:
                 ax.set_xlabel(None)

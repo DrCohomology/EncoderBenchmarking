@@ -4,7 +4,7 @@ Repository for the paper [A benchmark of categorical encoders for binary classif
 accepted at NeurIPS 2023, Datasets and Benchmarks track.
 
 <figure>
-  <img alt="Ranks of encoders" src="analysis/plots/encoder_ranks.png" title="Ranks">
+  <img alt="Ranks of encoders" src="figures/encoder_ranks.png" title="Ranks">
   <figcaption><em>
         Ranks of encoders conditional on the model (lower rank is better).
         Sum, One-Hot, WoE, and Binary encoders are consistently among the best for logistic regression (LogReg), 
